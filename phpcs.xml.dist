@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<ruleset name="brand-fleet">
+	<description>WordPress VIP coding standards for the Brand Fleet plugin.</description>
+
+	<file>.</file>
+	<exclude-pattern>vendor/*</exclude-pattern>
+
+	<arg name="extensions" value="php" />
+	<arg value="sp" />
+
+	<rule ref="WordPress-VIP-Go" />
+</ruleset>

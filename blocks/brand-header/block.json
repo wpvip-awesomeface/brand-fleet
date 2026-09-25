@@ -1,0 +1,20 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "brand-fleet/brand-header",
+	"version": "1.0.0",
+	"title": "Brand Header",
+	"category": "brand-fleet",
+	"icon": "heading",
+	"description": "Site header with the constant parent mark and the per-site brand logo that swaps from Brand Identity settings.",
+	"keywords": [ "header", "logo", "brand" ],
+	"textdomain": "brand-fleet",
+	"editorScript": "brand-fleet-brand-header-editor",
+	"style": "brand-fleet-brand-header-style",
+	"render": "file:./render.php",
+	"attributes": {},
+	"supports": {
+		"html": false,
+		"align": [ "full" ]
+	}
+}

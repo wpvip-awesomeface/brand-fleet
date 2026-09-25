@@ -1,0 +1,173 @@
+.brand-fleet-footer {
+	background: #0e1b33;
+	color: #c7cede;
+	font-family: inherit;
+}
+
+.brand-fleet-footer__inner {
+	max-width: 1200px;
+	margin: 0 auto;
+	padding: 3.5rem 1.5rem 3rem;
+	display: grid;
+	grid-template-columns: 1.4fr 1fr 1fr 1.2fr;
+	gap: 2.5rem;
+}
+
+.brand-fleet-footer__logo {
+	display: block;
+	height: 48px;
+	width: auto;
+	max-width: 200px;
+	object-fit: contain;
+	margin-bottom: 1rem;
+}
+
+.brand-fleet-footer__logo-text {
+	display: block;
+	font-size: 1.5rem;
+	font-weight: 800;
+	color: #fff;
+	margin-bottom: 1rem;
+}
+
+.brand-fleet-footer__copy {
+	font-size: 0.8rem;
+	margin: 0 0 0.5rem;
+}
+
+.brand-fleet-footer__legal {
+	font-size: 0.8rem;
+	margin: 0 0 1.2rem;
+	display: flex;
+	gap: 1rem;
+}
+
+.brand-fleet-footer__legal a {
+	color: #c7cede;
+	text-decoration: underline;
+}
+
+.brand-fleet-footer__social {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	gap: 0.7rem;
+}
+
+.brand-fleet-footer__social a {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	border: 1px solid #3a4a6b;
+	color: #fff;
+}
+
+.brand-fleet-footer__social a:hover {
+	border-color: var(--brand-fleet-accent, #3858e9);
+	color: var(--brand-fleet-accent, #3858e9);
+}
+
+.brand-fleet-footer__social svg {
+	width: 18px;
+	height: 18px;
+}
+
+.brand-fleet-footer__col h3 {
+	color: #fff;
+	font-size: 0.85rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin: 0 0 1rem;
+}
+
+.brand-fleet-footer__col ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.brand-fleet-footer__col li {
+	margin-bottom: 0.6rem;
+}
+
+.brand-fleet-footer__col a {
+	color: #c7cede;
+	text-decoration: none;
+	font-size: 0.9rem;
+}
+
+.brand-fleet-footer__col a:hover {
+	color: #fff;
+}
+
+.brand-fleet-footer__contact p {
+	margin: 0 0 0.6rem;
+	font-size: 0.9rem;
+}
+
+.brand-fleet-footer__contact p span {
+	color: #8a94ab;
+	margin-right: 0.35rem;
+}
+
+.brand-fleet-footer__contact a {
+	color: #fff;
+	font-weight: 700;
+	text-decoration: none;
+}
+
+.brand-fleet-footer__contact address {
+	font-style: normal;
+	font-size: 0.85rem;
+	line-height: 1.6;
+	margin: 0.4rem 0 1.2rem;
+	color: #8a94ab;
+}
+
+.brand-fleet-btn--outline {
+	background: transparent;
+	border: 1.5px solid #fff;
+	color: #fff;
+}
+
+.brand-fleet-btn--outline:hover {
+	background: var(--brand-fleet-accent, #3858e9);
+	border-color: var(--brand-fleet-accent, #3858e9);
+	filter: none;
+}
+
+@media (max-width: 900px) {
+	.brand-fleet-footer__inner {
+		grid-template-columns: 1fr 1fr;
+	}
+}
+
+@media (max-width: 560px) {
+	.brand-fleet-footer__inner {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Corporate variant follows the active theme rather than a fixed brand palette. */
+.brand-fleet-footer--corporate {
+	background: var(--wp--preset--color--contrast, #142f43);
+	color: var(--wp--preset--color--base, #fff);
+}
+.brand-fleet-footer--corporate .brand-fleet-footer__inner { grid-template-columns: 1.3fr 1fr 1fr; }
+.brand-fleet-footer--corporate .brand-fleet-footer__col h2 { color: inherit; font-size: 1.1rem; margin: 0 0 1rem; }
+.brand-fleet-footer--corporate a,
+.brand-fleet-footer--corporate .brand-fleet-footer__contact address { color: inherit; }
+.brand-fleet-footer--corporate .brand-fleet-footer__social a { width: 44px; height: 44px; border-color: currentColor; }
+.brand-fleet-footer--corporate .brand-fleet-footer__social a:hover { color: var(--wp--preset--color--accent, #c5edbd); border-color: currentColor; }
+.brand-fleet-footer--corporate a:focus-visible { outline: 2px solid currentColor; outline-offset: 5px; }
+.brand-fleet-footer--corporate .brand-fleet-footer__logo-text { text-decoration: none; }
+.brand-fleet-footer--corporate .brand-fleet-footer__notice { grid-column: 1 / -1; border-top: 1px solid currentColor; padding-top: 1.5rem; font-size: .85rem; }
+.brand-fleet-footer--corporate .brand-fleet-footer__inner > * { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 780px) {
+	.brand-fleet-footer--corporate .brand-fleet-footer__inner { grid-template-columns: 1fr; }
+}

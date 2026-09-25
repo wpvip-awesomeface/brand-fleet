@@ -1,0 +1,24 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "brand-fleet/shared-content",
+	"version": "1.0.0",
+	"title": "Shared Content (from master site)",
+	"category": "brand-fleet",
+	"icon": "controls-repeat",
+	"description": "Renders a page from the master brand site with this site's {{token}} values swapped in. Leave the slug empty to pull the master's front page.",
+	"keywords": [ "shared", "master", "sync", "brand" ],
+	"textdomain": "brand-fleet",
+	"editorScript": "brand-fleet-shared-content-editor",
+	"render": "file:./render.php",
+	"attributes": {
+		"slug": {
+			"type": "string",
+			"default": ""
+		}
+	},
+	"supports": {
+		"html": false,
+		"align": [ "full" ]
+	}
+}

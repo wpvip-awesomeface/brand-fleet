@@ -1,0 +1,16 @@
+.brand-fleet { max-width: 1400px; }
+.brand-fleet nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+.brand-fleet .brand-fleet-search-form, .brand-fleet .brand-fleet-search-form > p { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 16px 0; }
+.brand-fleet .brand-fleet-search-form > p { margin: 0; }
+.brand-fleet .brand-fleet-search-form label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.brand-fleet .brand-fleet-search-form input[type=search], .brand-fleet .brand-fleet-search-form .button { box-sizing: border-box; height: 36px; min-height: 36px; margin: 0; line-height: 34px; border-radius: 4px; }
+.brand-fleet .brand-fleet-search-form input[type=search] { width: 320px; max-width: 100%; padding: 0 10px; }
+.brand-fleet .brand-fleet-search-form .button { padding: 0 16px; }
+.brand-fleet table td, .brand-fleet table th { padding: 12px; overflow-wrap: anywhere; }
+.brand-fleet .brand-fleet-definition-form { max-width: 800px; margin-top: 20px; padding: 24px; background: #fff; border: 1px solid #c3c4c7; border-radius: 4px; }
+.brand-fleet .brand-fleet-definition-form h3 { margin-top: 28px; border-bottom: 1px solid #dcdcde; padding-bottom: 12px; }
+.brand-fleet .brand-fleet-definition-form h3:first-child { margin-top: 0; }
+.brand-fleet .brand-fleet-definition-form input.regular-text, .brand-fleet .brand-fleet-definition-form select { min-height: 36px; max-width: 100%; }
+@media (max-width: 600px) { .brand-fleet .brand-fleet-search-form { width: 100%; } .brand-fleet .brand-fleet-search-form label { flex: 1; min-width: 160px; } .brand-fleet .brand-fleet-definition-form { padding: 16px; } }
+
+.brand-fleet [hidden] { display: none !important; }

@@ -1,0 +1,7 @@
+.brand-fleet-site-picker { max-width: 760px; margin: 20px 0; padding: 16px; border: 1px solid #c3c4c7; border-radius: 4px; background: #fff; }
+.brand-fleet-site-picker legend { font-weight: 600; padding: 0 5px; }
+.brand-fleet-site-picker summary { cursor: pointer; color: #2271b1; padding: 8px 0; }
+.brand-fleet-site-picker .brand-fleet-selected label { display: block; padding: 8px; margin-bottom: 6px; background: #f0f6fc; overflow-wrap: anywhere; }
+.brand-fleet-site-results { display: grid; gap: 5px; margin-top: 12px; max-height: 300px; overflow-y: auto; }
+.brand-fleet-site-results .button { white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.brand-fleet-site-picker [hidden] { display: none !important; }

@@ -40,6 +40,12 @@ inputs:
     required: false
     default: |
       actions: read
+  debug:
+    description: >-
+      The caller passes vars.AGENT_DEBUG. Composite actions cannot read the `vars`
+      context, so the caller hands the value in.
+    required: false
+    default: "false"
   report_issue_number:
     description: >-
       Issue to report a do-nothing run on. Leave empty to write the job summary
@@ -89,7 +95,7 @@ runs:
         # GitHub's own debug logging does not reveal SDK output — that was
         # tested, and the re-run returned nothing. Turn it on for one run in a
         # non-sensitive repo, read the log, turn it off.
-        show_full_output: ${{ vars.AGENT_DEBUG == 'true' }}
+        show_full_output: ${{ inputs.debug == 'true' }}
 
         # ADD YOUR PROJECT'S TEST AND LINT COMMANDS TO `allow` BELOW.
         #

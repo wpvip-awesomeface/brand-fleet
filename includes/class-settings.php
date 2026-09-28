@@ -29,6 +29,7 @@ class Settings {
 	const OPT_PHONE_SALES     = 'brand_fleet_phone_sales';
 	const OPT_PHONE_SUPPORT   = 'brand_fleet_phone_support';
 	const OPT_ADDRESS         = 'brand_fleet_address';
+	const OPT_FOOTER_SERVICES = 'brand_fleet_footer_services';
 	const OPT_MASTER_SITE     = 'brand_fleet_master_site';
 
 	/** Social profile URLs; an empty value means "do not render this network". */
@@ -53,6 +54,7 @@ class Settings {
 			self::OPT_PHONE_SALES     => '',
 			self::OPT_PHONE_SUPPORT   => '',
 			self::OPT_ADDRESS         => '',
+			self::OPT_FOOTER_SERVICES => '',
 			self::OPT_MASTER_SITE     => '',
 		);
 		foreach ( array_keys( self::SOCIAL_OPTS ) as $key ) {
@@ -166,6 +168,26 @@ class Settings {
 	 * Deterministic per site (options only) — no visitor state — so swapped
 	 * output stays fully edge-cacheable.
 	 */
+	/**
+	 * Footer "Services" links, one per line. Empty falls back to a neutral list.
+	 *
+	 * @return string[]
+	 */
+	public static function footer_services(): array {
+		$lines = preg_split( '/\R/', self::get( self::OPT_FOOTER_SERVICES ) );
+		$lines = array_values( array_filter( array_map( 'trim', (array) $lines ), 'strlen' ) );
+		if ( $lines ) {
+			return $lines;
+		}
+		return array(
+			__( 'Consulting', 'brand-fleet' ),
+			__( 'Managed Services', 'brand-fleet' ),
+			__( 'Implementation', 'brand-fleet' ),
+			__( 'Training', 'brand-fleet' ),
+			__( 'Support', 'brand-fleet' ),
+		);
+	}
+
 	public static function tokens(): array {
 		$address = trim( self::get( self::OPT_ADDRESS ) );
 		$address = preg_replace( '/\s*\R\s*/', ', ', $address );
@@ -216,6 +238,14 @@ class Settings {
 		register_setting(
 			self::GROUP,
 			self::OPT_ADDRESS,
+			array(
+				'type'              => 'string',
+				'sanitize_callback' => 'sanitize_textarea_field',
+			)
+		);
+		register_setting(
+			self::GROUP,
+			self::OPT_FOOTER_SERVICES,
 			array(
 				'type'              => 'string',
 				'sanitize_callback' => 'sanitize_textarea_field',

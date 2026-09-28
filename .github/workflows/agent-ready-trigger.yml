@@ -1,0 +1,597 @@
+# Fires when an issue receives the 'agent-ready' label.
+# Routes to the AI agent configured in the AGENT_PROVIDER repository variable.
+#
+# Supported providers:
+#   claude        → Claude Code via anthropics/claude-code-action (default, fully supported)
+#   openai-codex  → OpenAI Codex CLI (stub — extend for your setup)
+#   copilot       → GitHub Copilot via gh-aw (stub — extend for your setup)
+#   custom        → repository_dispatch event (bring your own listener)
+#
+# Setup:
+#   1. Set AGENT_PROVIDER in Settings → Secrets and variables → Variables
+#   2. Add the required secret for your chosen provider (see README)
+#   3. Run the Setup Labels workflow once to create all labels
+#
+# If AGENT_PROVIDER is not set, the workflow defaults to claude.
+
+name: Agent-Ready Auto-Trigger
+
+on:
+  issues:
+    # `labeled` only, on purpose.
+    #
+    # `edited` hands the issue author a re-run button: anyone whose issue once
+    # earned an agent-ready label could rewrite the body with new instructions
+    # and re-fire the agent under a write-scoped token. A stale label must not
+    # authorize a run on text it never covered.
+    #
+    # `opened` is worse — an issue author fires it without write access at all.
+    #
+    # Both were added to make the auto-labeler work. It cannot: a label applied
+    # with GITHUB_TOKEN does not start a run. The fix for that is a human
+    # applying the label, which `labeled` already covers.
+    types: [labeled]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# One run per issue. Observed on 21 August: three runs started concurrently on a
+# single issue when its labels arrived close together, and the existing-PR check
+# stopped none of them — at that moment none had opened a PR yet, so each saw a
+# clear field. That check guards against duplicate pull requests; this guards
+# against duplicate runs, and they are different problems.
+#
+# cancel-in-progress is false on purpose. An agent run that is partway through
+# writing files and is then cancelled leaves nothing behind and reports nothing
+# useful; queuing costs a few minutes and keeps whatever the first run produced.
+concurrency:
+  group: agent-ready-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CLAUDE (default)
+  # Complexity-aware execution.
+  #
+  # complexity:high  → plan first, human approves by commenting /approve-plan,
+  #                    then plan-approval-gate.yml implements it
+  # complexity:low/medium (or absent) → implement directly
+  #
+  # The prompts below spell out the work rather than invoking the
+  # compound-engineering plugin's /ce-plan and /ce-work, which are local-only and
+  # not available on a GitHub runner.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trigger-claude:
+    # Two conditions, and both are load-bearing.
+    #
+    # The event's own label must be agent-ready. Without this, adding any other
+    # label to an already-agent-ready issue starts a run — observed live when a
+    # complexity label and agent-ready arrived seconds apart and produced two
+    # runs on one issue.
+    #
+    # The full label set still comes from the API further down, because a
+    # `labeled` event carries one label and routing needs to know about
+    # complexity. Reading the set is what #16 fixed; gating on the event is what
+    # it removed and should not have.
+    if: |
+      github.event.label.name == 'agent-ready' &&
+      (vars.AGENT_PROVIDER == 'claude' || vars.AGENT_PROVIDER == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The real trust boundary is here, not in the allow list. An agent run
+      # holds a write-scoped token and takes the issue body as instructions, so
+      # what bounds it is who can cause one to start. The allow list is defence
+      # in depth behind this check.
+      - name: Require the labelling actor to have write access
+        id: actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const actor = context.payload.sender?.login;
+            if (!actor) {
+              core.setOutput('allowed', 'false');
+              console.log('No sender on the event — refusing.');
+              return;
+            }
+            let level = 'none';
+            try {
+              const r = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: actor,
+              });
+              level = r.data.permission;
+            } catch (err) {
+              level = 'none';
+            }
+            const allowed = ['write', 'admin'].includes(level);
+            console.log(`Label applied by ${actor} (permission: ${level}) — allowed: ${allowed}`);
+            core.setOutput('allowed', allowed ? 'true' : 'false');
+
+      - name: Stop unless the labeller has write access
+        if: steps.actor.outputs.allowed != 'true'
+        run: |
+          echo "The agent-ready label was not applied by someone with write access."
+          echo "Nothing will run. A maintainer can apply the label to start the agent."
+
+      # Labels come from the API, not from github.event: a `labeled` event carries
+      # one label, so an issue that gains agent-ready and complexity:high close
+      # together could otherwise route on whichever arrived first and skip the
+      # planning phase.
+      - name: Read the issue's labels
+        if: steps.actor.outputs.allowed == 'true'
+        id: labels
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+            });
+            const labels = issue.labels.map(l => (typeof l === 'string' ? l : l.name));
+            const ready = labels.includes('agent-ready');
+            const isHigh = labels.includes('complexity:high');
+            console.log('Issue labels:', labels.join(', ') || '(none)');
+            console.log('agent-ready:', ready, '| complexity:high:', isHigh);
+            core.setOutput('ready', ready ? 'true' : 'false');
+            core.setOutput('is_high', isHigh ? 'true' : 'false');
+
+      - name: Stop unless the issue is agent-ready
+        if: steps.labels.outputs.ready != 'true'
+        run: echo "Not labelled agent-ready — nothing to do."
+
+      # Applying agent-ready to a half-written issue used to run the agent
+      # anyway. It would spend turns and money on a brief with no acceptance
+      # criteria, then produce something nobody asked for. Refusing costs
+      # seconds and says what is missing.
+      #
+      # This is structural only: it cannot judge whether the criteria are any
+      # good, only that they are there.
+      - name: Screen the issue before spending anything
+        id: screen
+        if: steps.actor.outputs.allowed == 'true' && steps.labels.outputs.ready == 'true'
+        uses: ./.github/actions/screen-issue
+        with:
+          issue_body: ${{ github.event.issue.body }}
+
+      - name: Refuse a malformed issue
+        if: steps.screen.outputs.ready == 'false'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const missing = `${{ steps.screen.outputs.missing }}`.split('\n').filter(Boolean);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: [
+                '### Not started — this issue is missing some structure',
+                '',
+                'The agent was not run. These are missing:',
+                '',
+                ...missing.map(m => `- ${m}`),
+                '',
+                'Add them and re-apply `agent-ready` to start. Removing and re-adding the',
+                'label is what fires the trigger — re-applying a label that is already there',
+                'emits no event.',
+                '',
+                'This check is structural: it confirms the sections exist, not that they say',
+                'anything useful. It is here so the agent does not spend turns on a brief',
+                'that cannot be executed.'
+              ].join('\n')
+            });
+
+      # plan-approval-gate.yml has had this check since it was written; the
+      # direct path never did, and no PR in the current batch adds one. Without
+      # it, removing and re-applying the label starts a second full run and opens
+      # a second pull request against the same issue.
+      - name: Check for an existing agent PR
+        id: pr-check
+        if: steps.actor.outputs.allowed == 'true' && steps.labels.outputs.ready == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const n = context.payload.issue.number;
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = prs.find(pr =>
+              pr.body && new RegExp(`(closes|fixes|resolves)\\s+#${n}\\b`, 'i').test(pr.body)
+            );
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: n,
+                body: `An agent pull request for this issue is already open: ${existing.html_url}\n\nNo second run was started. Close that pull request first if you want the agent to start over.`,
+              });
+              console.log(`Existing PR found: ${existing.html_url} — skipping.`);
+            }
+            core.setOutput('already_running', existing ? 'true' : 'false');
+
+      # ── HIGH COMPLEXITY: plan first, then gate on /approve-plan ──────────────
+      - name: Run Claude Code — Planning Phase (complexity:high)
+        id: claude-plan
+        if: steps.actor.outputs.allowed == 'true' && steps.labels.outputs.ready == 'true' && steps.pr-check.outputs.already_running == 'false' && steps.screen.outputs.ready == 'true' && steps.labels.outputs.is_high == 'true'
+        uses: ./.github/actions/claude-run
+        with:
+          oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          report_issue_number: ${{ github.event.issue.number }}
+          github_token: ${{ github.token }}
+          prompt: |
+            You are planning the implementation for issue #${{ github.event.issue.number }}.
+
+            Issue title: ${{ github.event.issue.title }}
+
+            This is a complexity:high issue. Your job is to PLAN, not implement.
+
+            Instructions:
+            1. Read the full issue body:
+               gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }}
+            2. Read CLAUDE.md for project-specific guidance
+            3. Read the key files referenced in Technical Notes to understand the codebase
+            4. Write a structured implementation plan as a markdown file saved to:
+               docs/plans/YYYY-MM-DD-NNN-<type>-<short-title>-plan.md
+               The plan should include: problem frame, requirements, scope boundaries,
+               key technical decisions, and implementation units (each with goal, files,
+               approach, and test scenarios)
+            5. Commit the plan file to a new branch named:
+               plan/issue-${{ github.event.issue.number }}
+            6. After committing, post a comment on the issue with:
+               - A link to the plan file (GitHub URL)
+               - "Implementation plan is ready for review. Reply /approve-plan to begin
+                 implementation."
+               - "To change the plan first: edit the file on the plan branch, or add
+                 your feedback to this issue and re-apply the agent-ready label to
+                 replan. Commenting alone does not trigger anything — only
+                 /approve-plan is listened for."
+            7. Do NOT write any application code
+            8. Do NOT open a pull request
+
+
+            WRITING GITHUB ACTIONS WORKFLOW FILES:
+
+            Write every run: as a block scalar (run: |) by default. In a plain
+            run: line, a colon followed by a space is parsed as a mapping and the
+            whole file stops being valid YAML. Quoting does not save you — the
+            outer scalar is still plain:
+
+                run: echo $(( x > 0 ? 1 : 0 ))     # breaks
+                run: git commit -m "fix: thing"    # breaks too
+
+                run: |                             # fine
+                  git commit -m "fix: thing"
+
+            GitHub cannot schedule a job from a file it could not read, so the
+            run ends in seconds with no jobs and no log. That reads as broken
+            code rather than broken YAML.
+
+            Before opening the PR, if you added or changed anything under
+            .github/workflows/, run:
+
+                bash scripts/validate-workflows.sh
+
+            Fix what it reports and run it again. Do not open the PR while it
+            is failing.
+
+            If this repository depends on code you cannot read from here — a private
+            dependency, an API you cannot reach — do NOT guess its contract. Name the gap
+            in the plan, say which design decision rests on it, and state what you would
+            do instead if the assumption turns out to be wrong. An unverifiable interface
+            named in a plan is a question a reviewer can answer; guessed in code it is a
+            bug that passes review.
+      - name: Run Claude Code — Direct Execution (complexity:low/medium)
+        id: claude-work
+        if: steps.actor.outputs.allowed == 'true' && steps.labels.outputs.ready == 'true' && steps.pr-check.outputs.already_running == 'false' && steps.screen.outputs.ready == 'true' && steps.labels.outputs.is_high == 'false'
+        uses: ./.github/actions/claude-run
+        with:
+          oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          report_issue_number: ${{ github.event.issue.number }}
+          github_token: ${{ github.token }}
+          prompt: |
+            You are implementing issue #${{ github.event.issue.number }}.
+
+            Issue title: ${{ github.event.issue.title }}
+
+            Instructions:
+            1. Read the full issue body carefully using the GitHub CLI:
+               gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }}
+            2. Read CLAUDE.md for project-specific guidance
+            3. Implement the feature following the acceptance criteria exactly
+            4. Stay within the defined scope — "Out of scope" is a hard boundary
+            5. Follow the patterns referenced in Technical Notes (read the key files listed there)
+            6. Create a branch, commit your changes, and open a PR:
+               - Branch name: agent/issue-${{ github.event.issue.number }}
+               - PR title should match the issue title
+               - PR body: reference "Closes #${{ github.event.issue.number }}" and summarize what you did
+               - Use the template at .github/PULL_REQUEST_TEMPLATE/agent-generated.md if it exists
+            7. Add the 'agent-generated' label to the PR
+            8. After the PR is open, update the original issue's acceptance criteria:
+               - Check off any criteria your implementation directly satisfies
+               - Leave unchecked anything that requires manual testing, human review, or CI
+               - Use gh issue edit to update the checkbox state in the issue body
+
+            If you are blocked or unclear on something, post a comment on the issue
+            asking for clarification rather than guessing.
+
+
+            WRITING GITHUB ACTIONS WORKFLOW FILES:
+
+            Write every run: as a block scalar (run: |) by default. In a plain
+            run: line, a colon followed by a space is parsed as a mapping and the
+            whole file stops being valid YAML. Quoting does not save you — the
+            outer scalar is still plain:
+
+                run: echo $(( x > 0 ? 1 : 0 ))     # breaks
+                run: git commit -m "fix: thing"    # breaks too
+
+                run: |                             # fine
+                  git commit -m "fix: thing"
+
+            GitHub cannot schedule a job from a file it could not read, so the
+            run ends in seconds with no jobs and no log. That reads as broken
+            code rather than broken YAML.
+
+            Before opening the PR, if you added or changed anything under
+            .github/workflows/, run:
+
+                bash scripts/validate-workflows.sh
+
+            Fix what it reports and run it again. Do not open the PR while it
+            is failing.
+
+            If this repository depends on code you cannot read from here — a private
+            dependency, an API you cannot reach — do NOT guess its contract. Implement
+            what you can, and state the unverified assumption plainly in the PR body (or
+            in the plan) so a reviewer can check it. A confident PR built on a guessed
+            interface passes review and fails in production.
+      - name: Report agent failure
+        if: failure() || cancelled()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const MARKER = '<!-- agentic-workflow:failure-report -->';
+            const lines = [
+                '⚠️ **The agent run failed**',
+                '',
+                `The failing step and its error are in the [job log](${runUrl}) — start there.`,
+                '',
+                'The Claude provider needs two things, and setup is incomplete if either is missing:',
+                '',
+                '- the `CLAUDE_CODE_OAUTH_TOKEN` secret — **Settings → Secrets and variables → Secrets**',
+                '- the **Claude GitHub App** installed on this repository — https://github.com/apps/claude',
+                '',
+                'A missing app shows up as `App token exchange failed: 401 Unauthorized` within a few seconds of the run starting.',
+                '',
+                'See the [README](../blob/main/README.md) for the full setup.'
+            ];
+            // Update in place. This comment used to stack: observed posting
+            // twice for one issue, and staying the newest word on the issue
+            // long after the cause was fixed and a later run had succeeded.
+            const body = [MARKER, ...lines].join('\n');
+            const { data: existing } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              per_page: 100,
+            });
+            const mine = existing.find(c => c.body && c.body.includes(MARKER));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.payload.issue.number, body,
+              });
+            }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # OPENAI CODEX (stub)
+  # TODO: extend this job for your Codex setup.
+  # See https://github.com/openai/codex for the CLI reference.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trigger-openai-codex:
+    if: |
+      github.event.label.name == 'agent-ready' &&
+      vars.AGENT_PROVIDER == 'openai-codex'
+    runs-on: ubuntu-latest
+    # Only what a stub needs. Raise contents/pull-requests to write when you
+    # implement the job below - and note ISSUE_BODY is untrusted input that will
+    # reach your agent as instructions.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # TODO: Replace this stub with your Codex invocation.
+          # Example using the Codex CLI:
+          #
+          #   npm install -g @openai/codex
+          #   codex --approval-mode full-auto \
+          #     --model o4-mini \
+          #     "Implement issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          #
+          # After implementation, create a PR:
+          #   git push origin HEAD
+          #   gh pr create --title "..." --body "Closes #${ISSUE_NUMBER}"
+          #
+          echo "OpenAI Codex provider stub — configure this step for your setup"
+          echo "Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+
+      - name: Report that this provider is not implemented
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: [
+                '### No pull request will be opened',
+                '',
+                '`AGENT_PROVIDER` is set to `openai-codex`, which is not implemented in this',
+                'template. The `trigger-openai-codex` job is a stub: it does not run an agent.',
+                '',
+                'Two ways forward:',
+                '',
+                '- Implement `trigger-openai-codex` in `.github/workflows/agent-ready-trigger.yml`.',
+                '- Or set `AGENT_PROVIDER` to `claude`, the one provider implemented today.',
+                '',
+                'This run is marked failed on purpose. A run that produces nothing should not',
+                'report success \u2014 that is how a repository looks configured while the agent',
+                'silently never fires.'
+              ].join('\n')
+            });
+            core.setFailed('AGENT_PROVIDER=openai-codex is a stub; no agent ran and no PR was opened.');
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GITHUB COPILOT via gh-aw (stub)
+  # TODO: extend this job for your gh-aw setup.
+  # See https://github.com/github/gh-aw for the CLI reference.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trigger-copilot:
+    if: |
+      github.event.label.name == 'agent-ready' &&
+      vars.AGENT_PROVIDER == 'copilot'
+    runs-on: ubuntu-latest
+    # Only what a stub needs. Raise contents/pull-requests to write when you
+    # implement the job below.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Copilot via gh-aw
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # TODO: Replace this stub with your gh-aw invocation.
+          # Prerequisites:
+          #   1. Install gh-aw: gh extension install github/gh-aw
+          #   2. Author a workflow markdown file (e.g., .github/workflows/implement-issue.md)
+          #   3. Compile it: gh aw compile implement-issue
+          #
+          # Then invoke the compiled workflow:
+          #   gh aw run implement-issue --issue "${ISSUE_NUMBER}"
+          #
+          echo "GitHub Copilot (gh-aw) provider stub — configure this step for your setup"
+          echo "Issue #${ISSUE_NUMBER}"
+
+      - name: Report that this provider is not implemented
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: [
+                '### No pull request will be opened',
+                '',
+                '`AGENT_PROVIDER` is set to `copilot`, which is not implemented in this',
+                'template. The `trigger-copilot` job is a stub: it does not run an agent.',
+                '',
+                'Two ways forward:',
+                '',
+                '- Implement `trigger-copilot` in `.github/workflows/agent-ready-trigger.yml`.',
+                '- Or set `AGENT_PROVIDER` to `claude`, the one provider implemented today.',
+                '',
+                'This run is marked failed on purpose. A run that produces nothing should not',
+                'report success \u2014 that is how a repository looks configured while the agent',
+                'silently never fires.'
+              ].join('\n')
+            });
+            core.setFailed('AGENT_PROVIDER=copilot is a stub; no agent ran and no PR was opened.');
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CUSTOM — repository_dispatch
+  # Emits an event that a listener workflow in this repo can consume.
+  # Note: repository_dispatch events are NOT cross-repo. Your listener workflow
+  # must be in this same repository. For outbound HTTP to an external agent,
+  # replace the github-script step with a curl call.
+  # ─────────────────────────────────────────────────────────────────────────────
+  trigger-custom:
+    if: |
+      github.event.label.name == 'agent-ready' &&
+      vars.AGENT_PROVIDER == 'custom'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Dispatch agent-ready event
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'agent-ready',
+              client_payload: {
+                issue_number: context.payload.issue.number,
+                issue_title: context.payload.issue.title,
+                issue_body: context.payload.issue.body,
+                issue_url: context.payload.issue.html_url,
+                labels: context.payload.issue.labels.map(l => l.name)
+              }
+            });
+            console.log(`Dispatched agent-ready event for issue #${context.payload.issue.number}`);
+
+      # A dispatch with no listener is indistinguishable from a working setup:
+      # the job goes green and the issue stays silent. Say what happened, so the
+      # absence of a follow-up reads as "my listener did not run" rather than
+      # "the agent ignored me".
+      - name: Say that the event was dispatched
+        if: success()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: [
+                'Dispatched a `repository_dispatch` event of type `agent-ready` for this issue.',
+                '',
+                'This template does not implement the agent for `AGENT_PROVIDER=custom` \u2014 it',
+                'hands off. If nothing happens next, the listener workflow in this repository',
+                'is missing or did not match; `repository_dispatch` is not cross-repo, so the',
+                'listener has to live here.'
+              ].join('\n')
+            });

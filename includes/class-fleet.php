@@ -7,6 +7,8 @@ defined( 'ABSPATH' ) || exit;
 class Fleet {
 	const SCHEMA = 'brand_fleet_schema';
 	const PROFILE = 'brand_fleet_profile';
+	/** Indexed site-meta marker so Sites in Fleet can list managed sites first. */
+	const MANAGED = 'brand_fleet_managed';
 	private static bool $bulk_audit = false;
 	public static function bulk_write( callable $callback ) {
 		self::$bulk_audit = true;
@@ -157,6 +159,7 @@ class Fleet {
 		$p['revision'] = (int) ( $old['revision'] ?? 0 ) + 1;
 		if ( $preview ) { return $p; }
 		update_blog_option( $site, self::PROFILE, $p );
+		update_site_meta( $site, self::MANAGED, 1 );
 		// Encode relationship IDs in indexed meta keys; never filter unindexed meta_value.
 		foreach ( array( 'group', 'source' ) as $relation ) {
 			$previous = (int) ( $old[ $relation . '_id' ] ?? 0 );
@@ -169,6 +172,34 @@ class Fleet {
 		return $p;
 	}
 
+	/** One-time index backfill for profiles created before managed-first listing. */
+	public static function index_managed_sites(): void {
+		if ( get_network_option( get_current_network_id(), 'brand_fleet_managed_index', false ) ) { return; }
+		$offset = 0;
+		do {
+			$ids = get_sites( array( 'network_id' => get_current_network_id(), 'number' => 100, 'offset' => $offset, 'fields' => 'ids', 'orderby' => 'id', 'order' => 'ASC' ) );
+			foreach ( $ids as $id ) { if ( self::profile( (int) $id ) ) { update_site_meta( (int) $id, self::MANAGED, 1 ); } }
+			$offset += 100;
+		} while ( count( $ids ) === 100 );
+		update_network_option( get_current_network_id(), 'brand_fleet_managed_index', true );
+	}
+	/** Managed sites first, then unenrolled, each by site ID. Queried per state so sorting applies before pagination. */
+	public static function listed_sites( string $search, int $page ): array {
+		self::index_managed_sites();
+		$args = array( 'network_id' => get_current_network_id(), 'orderby' => 'id', 'order' => 'ASC', 'deleted' => 0, 'archived' => 0, 'spam' => 0 );
+		if ( $search ) { $args['search'] = '*' . $search . '*'; }
+		$managed = array( array( 'key' => self::MANAGED, 'compare' => 'EXISTS' ) );
+		// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Indexed managed-key existence; no unindexed meta_value comparison.
+		$count = (int) get_sites( array_merge( $args, array( 'count' => true, 'meta_query' => $managed ) ) );
+		$offset = ( max( 1, $page ) - 1 ) * 25;
+		// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Indexed managed-key existence; no unindexed meta_value comparison.
+		$sites = $offset < $count ? get_sites( array_merge( $args, array( 'number' => 26, 'offset' => $offset, 'meta_query' => $managed ) ) ) : array();
+		if ( count( $sites ) < 26 ) {
+			// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Indexed managed-key existence; no unindexed meta_value comparison.
+			$sites = array_merge( $sites, get_sites( array_merge( $args, array( 'number' => 26 - count( $sites ), 'offset' => max( 0, $offset - $count ), 'meta_query' => array( array( 'key' => self::MANAGED, 'compare' => 'NOT EXISTS' ) ) ) ) ) );
+		}
+		return $sites;
+	}
 	public static function locked( string $name, callable $callback ) {
 		$main = (int) get_main_site_id();
 		$key = 'brand_fleet_lock_' . sanitize_key( $name );

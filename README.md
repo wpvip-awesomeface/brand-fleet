@@ -6,6 +6,7 @@ Network-managed brand variables and bulk site management for WordPress multisite
 
 - **Variable registry** — define shared variables (business name, phones, address, logos, accent color, socials, or your own) with a default value, scope, and who may change it.
 - **Per-site inheritance** — enrolled sites inherit network defaults and can override values where the definition allows it. Sites that are not enrolled keep reading their own options.
+- **Sites in Fleet** — managed sites are listed first, then unenrolled sites, each in site-ID order; sorting happens before pagination and works with search. The first visit indexes existing profiles once per network (100 sites per read).
 - **Bulk updates** — select up to 10,000 sites, preview the exact before/after for each one, then apply the reviewed batch in resumable steps. Every batch is recorded in an activity log.
 - **Add Site onboarding** — new sites get inherited defaults pre-filled, with required site-specific fields enforced. When a site is created with MultilingualPress “Based on site”, links copied from the starting site (pages, posts, synced patterns, navigation, templates and template parts) are pointed at the new site, so a cloned location never links back to its template.
 - **Dynamic brand blocks** — server-rendered, build-free blocks that read the current site's values:

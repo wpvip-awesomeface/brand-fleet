@@ -166,9 +166,7 @@ class Fleet_Admin {
 		$q = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$page = max( 1, isset( $_GET['paged'] ) ? absint( $_GET['paged'] ) : 1 ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		echo '<h2>Sites in Fleet</h2><form class="brand-fleet-search-form"><input type="hidden" name="page" value="brand-fleet"><label>Search domain or path <input type="search" name="q" value="' . esc_attr( $q ) . '"></label><button class="button">Search</button></form><table class="widefat striped"><thead><tr><th>Site</th><th>Brand hub</th><th>Main data site</th><th>State</th></tr></thead><tbody>';
-		$args = array( 'network_id' => get_current_network_id(), 'number' => 26, 'offset' => ( $page - 1 ) * 25, 'orderby' => 'id', 'order' => 'ASC', 'deleted' => 0, 'archived' => 0, 'spam' => 0 );
-		if ( $q ) { $args['search'] = '*' . $q . '*'; }
-		$sites = get_sites( $args );
+		$sites = Fleet::listed_sites( $q, $page );
 		foreach ( array_slice( $sites, 0, 25 ) as $site ) { $p = Fleet::profile( (int) $site->blog_id ); echo '<tr><td><a href="' . esc_url( self::url( array( 'site_id' => $site->blog_id ) ) ) . '">' . esc_html( Site_Picker::label( (int) $site->blog_id ) ) . '</a></td><td>' . esc_html( empty( $p['group_id'] ) ? 'None' : Site_Picker::label( (int) $p['group_id'] ) ) . '</td><td>' . esc_html( empty( $p['source_id'] ) ? 'Network defaults' : Site_Picker::label( (int) $p['source_id'] ) ) . '</td><td>' . ( $p ? 'Managed' : 'Not enrolled' ) . '</td></tr>'; }
 		echo '</tbody></table><p>';
 		if ( $page > 1 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'paged' => $page - 1, 'q' => $q ) ) ) . '">Previous</a> '; }

@@ -19,13 +19,7 @@ $brand_fleet_address  = trim( Settings::get( Settings::OPT_ADDRESS ) );
 $brand_fleet_socials  = Settings::socials();
 $brand_fleet_year     = wp_date( 'Y' );
 
-$brand_fleet_services = array(
-	__( 'Consulting', 'brand-fleet' ),
-	__( 'Managed Services', 'brand-fleet' ),
-	__( 'Implementation', 'brand-fleet' ),
-	__( 'Training', 'brand-fleet' ),
-	__( 'Support', 'brand-fleet' ),
-);
+$brand_fleet_services = Settings::footer_services();
 
 $brand_fleet_company = array(
 	__( 'About', 'brand-fleet' )        => '#',

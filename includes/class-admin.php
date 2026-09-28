@@ -127,6 +127,13 @@ class Admin {
 							<p class="description"><?php esc_html_e( 'One line per row; shown in the footer and replaces {{address}}.', 'brand-fleet' ); ?></p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row"><label for="<?php echo esc_attr( Settings::OPT_FOOTER_SERVICES ); ?>"><?php esc_html_e( 'Footer services', 'brand-fleet' ); ?></label></th>
+						<td>
+							<textarea name="<?php echo esc_attr( Settings::OPT_FOOTER_SERVICES ); ?>" id="<?php echo esc_attr( Settings::OPT_FOOTER_SERVICES ); ?>" rows="5" class="regular-text"><?php echo esc_textarea( Settings::get( Settings::OPT_FOOTER_SERVICES ) ); ?></textarea>
+							<p class="description"><?php esc_html_e( 'One service per line, listed under "Services" in the footer. Leave empty for a general list.', 'brand-fleet' ); ?></p>
+						</td>
+					</tr>
 				</table>
 
 				<h2><?php esc_html_e( 'Social links', 'brand-fleet' ); ?></h2>

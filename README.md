@@ -12,6 +12,7 @@ Network-managed brand variables and bulk site management for WordPress multisite
   - `brand-fleet/brand-header`
   - `brand-fleet/brand-footer` (default and corporate layouts)
   - `brand-fleet/shared-content` — renders a page from a master site with this site's values swapped in
+- **Configurable footer** — the brand footer's "Services" column is set per site under **Settings → Brand Identity** (one service per line), with a neutral list when left empty.
 - **Content tokens** — `{{business_name}}`, `{{legal_name}}`, `{{phone_sales}}`, `{{phone_support}}`, `{{address}}`, and any defined variable key resolve per site in post content.
 - **Abilities API** — `brand-fleet/inspect`, `save-definition`, `configure-site`, `preview-bulk`, and `advance-bulk` for automation and MCP clients.
 - **Cache-friendly** — output varies only by site, never by visitor, so each site caches at full hit rate on edge caches keyed by host and path.

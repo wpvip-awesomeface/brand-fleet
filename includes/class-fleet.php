@@ -28,7 +28,7 @@ class Fleet {
 		foreach ( Settings::defaults() as $option => $value ) {
 			if ( Settings::OPT_MASTER_SITE === $option ) { continue; }
 			$key = substr( $option, strlen( Settings::PREFIX ) );
-			$type = str_contains( $key, 'url' ) || str_starts_with( $key, 'social_' ) ? 'url' : ( 'address' === $key ? 'textarea' : ( 'accent' === $key ? 'color' : 'text' ) );
+			$type = str_contains( $key, 'url' ) || str_starts_with( $key, 'social_' ) ? 'url' : ( in_array( $key, array( 'address', 'footer_services' ), true ) ? 'textarea' : ( 'accent' === $key ? 'color' : 'text' ) );
 			$defaults[ $key ] = array( 'label' => ucwords( str_replace( '_', ' ', $key ) ), 'type' => $type, 'default' => $value, 'scope' => 'location', 'access' => 'all', 'sites' => array(), 'required' => false, 'clone' => in_array( $key, array( 'business_name', 'legal_name', 'address' ), true ) );
 		}
 		return array_replace( $defaults, is_array( $saved ) ? $saved : array() );

@@ -342,3 +342,9 @@ public static function export(): array {
   1. Export definitions from one network.
   2. Import that file into a fresh network; preview, then apply; confirm Recent activity shows one entry.
   3. Try one rejected case: edit the exported file to change an existing key's `type`, import, and confirm it's rejected with "Existing types are immutable" while the rest of the file still applies.
+
+## Reviewer notes (apply during implementation)
+
+- `Fleet::validate_definition()` is called from `Fleet_Transfer`, so it must be `public static`, not `private`. A private method here is a runtime fatal that `scripts/lint.sh` will not catch.
+- Round trip of `access`: export turns `selected` into `none`. Importing onto a network where that key is already `selected` would switch it to `none` and silently end per-site editing for those sites. When the existing key is `selected` and the incoming value is `none`, keep the existing `access` (and `sites`), and don't count it as a change. Mention this in the preview intro copy in one short sentence.
+- Keep UI copy plain for non-technical network admins (for example "Preview import", "Apply import", "Nothing to import"); the plan's wording is good, keep it.

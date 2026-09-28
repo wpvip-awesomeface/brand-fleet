@@ -27,7 +27,7 @@ Network-managed brand variables and bulk site management for WordPress multisite
 ## Install
 
 1. Copy this repository into `wp-content/plugins/brand-fleet`.
-2. Network-activate **Brand Fleet** from **Network Admin → Plugins**.
+2. Network-activate **Brand Fleet** from **Network Admin → Plugins**. Once active, the plugin row shows a "Manage fleet" link (for network admins) that jumps straight to **Network Admin → Brand Fleet**.
 3. Open **Network Admin → Brand Fleet** to define variables and enroll sites.
 
 Per-site identity settings live under **Settings → Brand Identity** on each site.

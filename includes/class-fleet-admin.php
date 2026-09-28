@@ -9,9 +9,22 @@ class Fleet_Admin {
 		add_action( 'network_admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_post_brand_fleet_save', array( $this, 'save' ) );
 		add_action( 'wp_ajax_brand_fleet_batch', array( $this, 'batch' ) );
+		add_filter( 'network_admin_plugin_action_links_' . plugin_basename( BRAND_FLEET_DIR . 'brand-fleet.php' ), array( $this, 'network_action_links' ) );
 	}
 	public function menu(): void {
 		add_menu_page( 'Brand Fleet', 'Brand Fleet', 'manage_network_options', 'brand-fleet', array( $this, 'render' ), 'dashicons-admin-multisite', 30 );
+	}
+	/** Adds a "Manage fleet" shortcut to the plugin row in Network Admin → Plugins, before Deactivate. */
+	public function network_action_links( array $actions ): array {
+		if ( ! current_user_can( 'manage_network_options' ) ) {
+			return $actions;
+		}
+		$links = array( 'manage_fleet' => '<a href="' . esc_url( network_admin_url( 'admin.php?page=brand-fleet' ) ) . '">' . esc_html__( 'Manage fleet', 'brand-fleet' ) . '</a>' );
+		$position = array_search( 'deactivate', array_keys( $actions ), true );
+		if ( false === $position ) {
+			return $links + $actions;
+		}
+		return array_slice( $actions, 0, $position, true ) + $links + array_slice( $actions, $position, null, true );
 	}
 	private static function url( array $args = array() ): string { return add_query_arg( $args, network_admin_url( 'admin.php?page=brand-fleet' ) ); }
 	public static function begin( string $task ): void {

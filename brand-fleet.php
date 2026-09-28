@@ -44,6 +44,7 @@ require_once BRAND_FLEET_DIR . 'includes/class-fleet-cache.php';
 require_once BRAND_FLEET_DIR . 'includes/class-site-picker.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-admin.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-onboarding.php';
+require_once BRAND_FLEET_DIR . 'includes/class-fleet-clone.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-abilities.php';
 require_once BRAND_FLEET_DIR . 'includes/class-plugin.php';
 

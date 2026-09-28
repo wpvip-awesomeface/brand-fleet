@@ -1,0 +1,305 @@
+name: "Run Claude Code"
+description: >-
+  Invokes anthropics/claude-code-action with this repository's agreed permission
+  mode and allow list. One definition, four call sites.
+
+# Why this exists
+#
+# The permission mode, allow list and deny list were duplicated across four call
+# sites in three workflow files. They drifted once already, and a drifted allow
+# list is a security problem rather than an inconvenience: the issue body is
+# untrusted input that reaches the model as instructions, so anything allowed is
+# reachable by whoever can get an issue labelled.
+#
+# What is NOT here, and why
+#
+# `timeout-minutes` stays in the calling job. GitHub Actions does not support it
+# on a step inside a composite action — writing it here would be silently
+# ignored, which is worse than duplicating it. scripts/validate-workflows.sh
+# checks the job-level values still agree.
+#
+# Credentials arrive as inputs because a composite action cannot read the
+# `secrets` context. Callers pass `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
+
+inputs:
+  oauth_token:
+    description: "Claude Code OAuth token (from `claude setup-token`)."
+    required: true
+  prompt:
+    description: >-
+      Instructions for the agent. Leave empty to select the action's tag mode,
+      which claude-pr-feedback.yml relies on.
+    required: false
+    default: ""
+  trigger_phrase:
+    description: "Phrase that triggers tag mode. Only meaningful when `prompt` is empty."
+    required: false
+    default: "@claude"
+  additional_permissions:
+    description: "Extra GitHub permissions for the app token exchange."
+    required: false
+    default: |
+      actions: read
+  report_issue_number:
+    description: >-
+      Issue to report a do-nothing run on. Leave empty to write the job summary
+      only — claude-pr-feedback.yml runs against a pull request comment, where
+      there is no issue to report to.
+    required: false
+    default: ""
+  github_token:
+    description: "Token used to post the do-nothing comment. Required with report_issue_number."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Claude Code
+      id: claude
+      uses: anthropics/claude-code-action@239e3a730883eeb5c53db12b0fc9573b3024b126 # v1.0.191
+      with:
+        claude_code_oauth_token: ${{ inputs.oauth_token }}
+        prompt: ${{ inputs.prompt }}
+        trigger_phrase: ${{ inputs.trigger_phrase }}
+        additional_permissions: ${{ inputs.additional_permissions }}
+
+        # The permission mode has to travel here. Setting permissions.defaultMode
+        # in `settings` below does NOT reach the SDK: a run configured that way
+        # reports "permissionMode": "default" and refuses every write, which is
+        # what stopped this template opening a pull request at all.
+        claude_args: --permission-mode acceptEdits
+
+        # One comment, updated in place, rather than a stack. Without this a
+        # stale failure diagnosis stays the newest word on an issue forever —
+        # observed on a test repo, where "Agent setup incomplete: missing
+        # CLAUDE_CODE_OAUTH_TOKEN" was still the latest comment after the
+        # secret had been proven correct and a later run had succeeded.
+        use_sticky_comment: true
+
+        # Off unless AGENT_DEBUG is set to 'true' in repository variables.
+        #
+        # It is off by default for a reason worth reading before you flip it:
+        # this streams every Claude message, including tool execution results,
+        # into the job log. Those logs are visible to anyone who can see the
+        # repository. If a tool result touched a secret, an API key or customer
+        # data, it lands there.
+        #
+        # It exists because there is otherwise no way to see what a run did.
+        # GitHub's own debug logging does not reveal SDK output — that was
+        # tested, and the re-run returned nothing. Turn it on for one run in a
+        # non-sensitive repo, read the log, turn it off.
+        show_full_output: ${{ vars.AGENT_DEBUG == 'true' }}
+
+        # ADD YOUR PROJECT'S TEST AND LINT COMMANDS TO `allow` BELOW.
+        #
+        # This is not optional housekeeping. The shipped list contains no test
+        # runner, so out of the box the agent cannot execute the tests it
+        # writes. Measured across four real runs: 9, 10, 9 and 9 permission
+        # denials, every one of them the agent trying and failing to run a test
+        # suite that the issue template's "Tests pass" criterion asked it to.
+        #
+        # It reports that honestly rather than claiming the tests passed, which
+        # is the behaviour you want — but you are then reviewing unverified
+        # code. Grant what your project needs:
+        #
+        #   Node        "Bash(npm test)", "Bash(npm run lint)"
+        #   PHP         "Bash(vendor/bin/phpunit)", "Bash(composer test)"
+        #   Python      "Bash(pytest)", "Bash(python3 -m unittest *)"
+        #   Ruby        "Bash(bundle exec rspec)", "Bash(rake test)"
+        #   Go          "Bash(go test *)", "Bash(go vet *)"
+        #
+        # Prefer the narrowest pattern that works. A wildcard is a subcommand
+        # you have not thought about yet, and "Bash(php *)" is "php -r '<any
+        # code>'" — which scripts/validate-workflows.sh will reject.
+        #
+        # This list is NOT a sandbox. "Bash(git *)" and "Bash(gh *)" are
+        # deliberate exceptions — the run cannot commit or open a pull request
+        # without them — and both permit arbitrary execution (`git -c
+        # core.pager=...`) and egress (`git push <url>`, `gh gist create`). The
+        # deny list closes the escapes we know about; it is not a proof.
+        #
+        # The real boundary is upstream: who can cause a run to start.
+        #
+        # scripts/validate-workflows.sh rejects wildcard entries that run an
+        # arbitrary program or reach the network, so a widened list fails CI.
+        settings: |
+          {
+            "permissions": {
+              "defaultMode": "acceptEdits",
+              "allow": [
+                "Bash(git *)",
+                "Bash(gh *)",
+                "Bash(ls *)",
+                "Bash(cat *)",
+                "Bash(mkdir *)",
+                "Bash(rm *)",
+                "Bash(mv *)",
+                "Bash(cp *)",
+                "Bash(which *)",
+                "Bash(jq *)",
+                "Bash(bash scripts/validate-workflows.sh)",
+                "Bash(bash scripts/lint.sh)"
+              ],
+              "deny": [
+                "Bash(git -c *)",
+                "Bash(git config *)",
+                "Bash(git remote *)",
+                "Bash(gh api *)",
+                "Bash(gh gist *)",
+                "Bash(gh alias *)",
+                "Bash(gh extension *)"
+              ]
+            }
+          }
+
+    # ── Report what the run actually did ──────────────────────────────────────
+    #
+    # A run that finishes having done nothing still reports success, and the
+    # issue is told nothing at all. Observed on a scratch rig: one run spent 14
+    # turns and $0.27, reported is_error:false, and opened no pull request. The
+    # only trace was in the raw job log, where nobody looks.
+    #
+    # Everything needed is already in the execution log the action writes. Its
+    # final `result` record carries num_turns, total_cost_usd and
+    # permission_denials_count — the last one read 3, 9 and 10 across three real
+    # runs, and never reached a human. A denial count is not trivia: it is
+    # usually the agent being unable to run your test suite.
+    #
+    # The action exposes no `result` output, only a path to that log, so this
+    # reads the file rather than a convenient output.
+    - name: Summarise the run
+      if: always()
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+      run: |
+        {
+          echo "### Agent run"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # A cancelled run — a timeout is a cancellation, not a failure — is
+        # killed mid-write, so the file may be truncated or absent. That
+        # absence is itself the signal, and is worth saying plainly rather
+        # than failing the reporter.
+        if [[ -z "${EXECUTION_FILE:-}" || ! -s "$EXECUTION_FILE" ]]; then
+          {
+            echo "The run ended before it reported. This is what a timeout looks like:"
+            echo "the agent was stopped part-way and its execution log was never finished."
+            echo ""
+            echo "If the work looked close, raise \`timeout-minutes\` on this job."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # jq -s handles both a JSON array and a stream of concatenated
+        # objects, pretty-printed or not, so this does not depend on which
+        # shape the action happens to write.
+        result="$(jq -s '[.. | objects | select(.type? == "result")] | last' "$EXECUTION_FILE" 2>/dev/null)" || result=""
+
+        if [[ -z "$result" || "$result" == "null" ]]; then
+          echo "The execution log had no result record. See the raw job log." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        turns="$(printf '%s' "$result" | jq -r '.num_turns // "?"')"
+        cost="$(printf '%s' "$result" | jq -r '.total_cost_usd // 0')"
+        denials="$(printf '%s' "$result" | jq -r '.permission_denials_count // 0')"
+        errored="$(printf '%s' "$result" | jq -r '.is_error // false')"
+
+        {
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Turns | $turns |"
+          printf '| Cost | $%s |\n' "$cost"
+          echo "| Permission denials | $denials |"
+          echo "| Reported an error | $errored |"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ "$denials" != "0" ]]; then
+          {
+            echo "**$denials command(s) were refused by the allow list.**"
+            echo ""
+            echo "This is usually the agent being unable to run your project's tests."
+            echo "Add what it needs to the \`allow\` list in"
+            echo "\`.github/actions/claude-run/action.yml\` — for example"
+            echo "\`Bash(npm test)\` or \`Bash(pytest)\`. Prefer narrow patterns:"
+            echo "a wildcard is a subcommand you have not thought about yet."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        {
+          echo "turns=$turns"
+          echo "cost=$cost"
+          echo "denials=$denials"
+        } >> "$GITHUB_OUTPUT"
+      id: summary
+
+    # A run that produced no pull request is the failure mode that costs the
+    # most confidence, because nothing anywhere says so. The job is green, the
+    # issue is silent, and the customer is waiting for a PR that is not coming.
+    - name: Say so when the run produced nothing
+      if: always() && inputs.report_issue_number != '' && inputs.github_token != ''
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const n = Number('${{ inputs.report_issue_number }}');
+          const { data: prs } = await github.rest.pulls.list({
+            owner: context.repo.owner, repo: context.repo.repo,
+            state: 'open', per_page: 100,
+          });
+          const opened = prs.some(pr =>
+            pr.body && new RegExp(`(closes|fixes|resolves)\\s+#${n}\\b`, 'i').test(pr.body));
+          if (opened) return;
+
+          const turns   = '${{ steps.summary.outputs.turns }}'   || 'unknown';
+          const cost    = '${{ steps.summary.outputs.cost }}'    || 'unknown';
+          const denials = '${{ steps.summary.outputs.denials }}' || 'unknown';
+          const runUrl  = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+          const lines = [
+            '### The agent ran, but produced no pull request',
+            '',
+            `It spent **${turns} turn(s)** and **$${cost}**, and hit **${denials} permission denial(s)**.`,
+            '',
+            `Full detail: [job summary and log](${runUrl}).`,
+            '',
+          ];
+          if (denials && denials !== '0' && denials !== 'unknown') {
+            lines.push(
+              `The ${denials} refused command(s) are the first thing to check — that is usually the`,
+              'agent being unable to run this project\'s tests. Commands are granted in the',
+              '`allow` list in `.github/actions/claude-run/action.yml`.',
+              '');
+          }
+          lines.push(
+            'A run that changes nothing and reports success is the failure this template',
+            'exists to prevent, so it is reported here rather than left silent.');
+
+          // Update our own previous report rather than stacking a new one.
+          // use_sticky_comment above governs the action's comments, not this
+          // one, and a stale "the agent produced nothing" sitting under a run
+          // that later succeeded is exactly the confusion it exists to avoid.
+          const MARKER = '<!-- agentic-workflow:run-report -->';
+          const body = [MARKER, ...lines].join('\n');
+
+          const { data: existing } = await github.rest.issues.listComments({
+            owner: context.repo.owner, repo: context.repo.repo,
+            issue_number: n, per_page: 100,
+          });
+          const mine = existing.find(c => c.body && c.body.includes(MARKER));
+
+          if (mine) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              comment_id: mine.id, body,
+            });
+            return;
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner, repo: context.repo.repo,
+            issue_number: n, body,
+          });

@@ -258,7 +258,7 @@ runs:
             state: 'open', per_page: 100,
           });
           const opened = prs.some(pr =>
-            pr.body && new RegExp(`(closes|fixes|resolves)\\s+#${n}\\b`, 'i').test(pr.body));
+            pr.body && new RegExp(`(closes|fixes|resolves)[\\s:*]+#${n}\\b`, 'i').test(pr.body));
           if (opened) return;
 
           const turns   = '${{ steps.summary.outputs.turns }}'   || 'unknown';

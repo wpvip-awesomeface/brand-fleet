@@ -1,6 +1,6 @@
 ## 🤖 Agent-Generated PR
 
-**Closes:** #<!-- issue number -->
+Closes #<!-- issue number -->
 **Agent Used:** <!-- Claude Code / Codex / Copilot / Cursor / other -->
 **Complexity:** <!-- low / medium / high -->
 

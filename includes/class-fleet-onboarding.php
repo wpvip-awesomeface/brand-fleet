@@ -11,6 +11,41 @@ class Fleet_Onboarding {
 		add_action( 'load-site-new.php', array( $this, 'validate' ) );
 		// MLP duplicates at priority 20 (25 in CLI), including the options table.
 		add_action( 'wp_initialize_site', array( $this, 'created' ), PHP_INT_MAX, 1 );
+		// Fires once MLP has finished copying tables, before created() enrolls the site.
+		add_action( 'multilingualpress.duplicated_site', array( $this, 'relink' ), 10, 2 );
+	}
+	/** Point links copied from the starting site at the new site, so a clone never sends visitors back to its template. */
+	public function relink( $source, $site ): void {
+		$source = absint( $source );
+		$site   = absint( $site );
+		if ( ! Fleet::network_admin() || ! $source || ! $site || $source === $site ) { return; }
+		$from = trailingslashit( get_home_url( $source ) );
+		$to   = trailingslashit( get_home_url( $site ) );
+		if ( $from === $to ) { return; }
+		$map  = array( $from => $to, str_replace( '/', '\\/', $from ) => str_replace( '/', '\\/', $to ) );
+		$path = (string) wp_parse_url( $from, PHP_URL_PATH );
+		if ( '' !== $path && '/' !== $path ) {
+			$new = (string) wp_parse_url( $to, PHP_URL_PATH );
+			// Root-relative links only; bare path fragments elsewhere in text are left alone.
+			$map[ 'href="' . $path ] = 'href="' . $new;
+			$map[ '"url":"' . $path ] = '"url":"' . $new;
+		}
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Network-admin clone step; content-only writes, restored in finally.
+		switch_to_blog( $site );
+		try {
+			$types = array( 'page', 'post', 'wp_block', 'wp_navigation', 'wp_template', 'wp_template_part' );
+			for ( $paged = 1; ; ++$paged ) {
+				$ids = ( new \WP_Query( array( 'post_type' => $types, 'post_status' => 'any', 'fields' => 'ids', 'orderby' => 'ID', 'order' => 'ASC', 'posts_per_page' => 100, 'paged' => $paged, 'no_found_rows' => true ) ) )->posts;
+				if ( ! $ids ) { break; }
+				foreach ( $ids as $id ) {
+					$content = (string) get_post_field( 'post_content', $id, 'raw' );
+					$updated = strtr( $content, $map );
+					if ( $updated !== $content ) { wp_update_post( array( 'ID' => $id, 'post_content' => wp_slash( $updated ) ) ); }
+				}
+			}
+		} finally {
+			restore_current_blog();
+		}
 	}
 	public function form(): void {
 		if ( ! Fleet::network_admin() ) { return; }

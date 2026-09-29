@@ -8,6 +8,7 @@ class Fleet_Admin {
 		add_action( 'wp_ajax_brand_fleet_site_picker', array( Site_Picker::class, 'search' ) );
 		add_action( 'network_admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_post_brand_fleet_save', array( $this, 'save' ) );
+		add_action( 'admin_post_brand_fleet_export', array( $this, 'export' ) );
 		add_action( 'wp_ajax_brand_fleet_batch', array( $this, 'batch' ) );
 		add_filter( 'network_admin_plugin_action_links_' . plugin_basename( BRAND_FLEET_DIR . 'brand-fleet.php' ), array( $this, 'network_action_links' ) );
 	}
@@ -98,7 +99,7 @@ class Fleet_Admin {
 			$groups = array_values( array_filter( $groups, static function ( $row ) use ( $query, $defs ) {
 				$user = get_userdata( (int) $row['user'] );
 				$labels = array_map( static fn( $key ) => $defs[ $key ]['label'] ?? $key, $row['keys'] );
-				$text = implode( ' ', array_merge( $row['keys'], $labels, array( $row['time'], gmdate( 'M j, Y', strtotime( $row['time'] ) ), $user ? $user->display_name . ' ' . $user->user_login : 'Deleted user', $row['action'], $row['phase'] ?? '', 'definition' === $row['action'] ? 'Variable definition saved' : ( 'bulk' === $row['action'] ? 'Bulk update' : 'Site updated similar edits' ) ) ) );
+				$text = implode( ' ', array_merge( $row['keys'], $labels, array( $row['time'], gmdate( 'M j, Y', strtotime( $row['time'] ) ), $user ? $user->display_name . ' ' . $user->user_login : 'Deleted user', $row['action'], $row['phase'] ?? '', 'definition' === $row['action'] ? 'Variable definition saved' : ( 'import' === $row['action'] ? 'Definitions imported' : ( 'bulk' === $row['action'] ? 'Bulk update' : 'Site updated similar edits' ) ) ) ) );
 				return false !== stripos( $text, $query );
 			} ) );
 		}
@@ -109,7 +110,7 @@ class Fleet_Admin {
 			$user = get_userdata( (int) $row['user'] );
 			$labels = array_map( static fn( $key ) => $defs[ $key ]['label'] ?? $key, $row['keys'] );
 			$is_bulk = 'bulk' === $row['action'];
-			$action = $is_bulk ? ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) : ( 'definition' === $row['action'] ? 'Variable definition saved' : ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) );
+			$action = $is_bulk ? ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) : ( 'definition' === $row['action'] ? 'Variable definition saved' : ( 'import' === $row['action'] ? 'Definitions imported' : ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) ) );
 			echo '<tr><td>' . esc_html( gmdate( 'M j, Y H:i', strtotime( $row['time'] ) ) ) . '</td><td>' . esc_html( $user ? $user->display_name : 'Deleted user' ) . '</td><td>' . esc_html( $action ) . '</td><td>' . esc_html( $labels ? implode( ', ', $labels ) : 'Connections / enrollment' ) . '</td><td>';
 			if ( $is_bulk ) {
 				echo esc_html( sprintf( '%d sites: %d updated, %d skipped, %d pending', $row['total'], $row['updated'], $row['skipped'], max( 0, $row['total'] - $row['updated'] - $row['skipped'] ) ) );
@@ -134,11 +135,14 @@ class Fleet_Admin {
 	private function definitions(): void {
 		$search = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$edit = isset( $_GET['key'] ) ? sanitize_key( wp_unslash( $_GET['key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only navigation.
 		$defs = Fleet::definitions(); $d = $defs[ $edit ] ?? array();
 		if ( isset( $_GET['saved'] ) ) { echo '<div class="notice notice-success"><p>Variable saved.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+		elseif ( isset( $_GET['imported'] ) ) { $count = absint( $_GET['imported'] ); echo '<div class="notice notice-success"><p>' . esc_html( $count > 0 ? sprintf( 'Imported %d definition(s).', $count ) : 'Nothing to import — all keys were unchanged or rejected.' ) . '</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+		if ( 'import' === $view ) { $this->import_view(); return; }
 		$new = isset( $_GET['new_variable'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only navigation.
 		if ( ! $edit && ! $new ) {
-			echo '<h2>Variable definitions <a class="page-title-action" href="' . esc_url( self::url( array( 'tab' => 'definitions', 'new_variable' => 1 ) ) ) . '">Add new variable</a></h2><p>Define the information your sites share, its default value, and who can change it.</p><form method="get" class="brand-fleet-search-form"><input type="hidden" name="page" value="brand-fleet"><input type="hidden" name="tab" value="definitions"><p><label>Search variables <input type="search" name="q" value="' . esc_attr( $search ) . '"></label> <button class="button">Search</button></p></form>';
+			echo '<h2>Variable definitions <a class="page-title-action" href="' . esc_url( self::url( array( 'tab' => 'definitions', 'new_variable' => 1 ) ) ) . '">Add new variable</a> <a class="page-title-action" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=brand_fleet_export' ), 'brand_fleet_export' ) ) . '">Export definitions</a> <a class="page-title-action" href="' . esc_url( self::url( array( 'tab' => 'definitions', 'view' => 'import' ) ) ) . '">Import definitions</a></h2><p>Define the information your sites share, its default value, and who can change it. Export downloads every definition as JSON; import always shows a preview before writing anything, and moves definitions only — never per-site values.</p><form method="get" class="brand-fleet-search-form"><input type="hidden" name="page" value="brand-fleet"><input type="hidden" name="tab" value="definitions"><p><label>Search variables <input type="search" name="q" value="' . esc_attr( $search ) . '"></label> <button class="button">Search</button></p></form>';
 			$filtered = array_filter( $defs, static fn( $def, $key ) => ! $search || false !== stripos( $key . ' ' . $def['label'], $search ), ARRAY_FILTER_USE_BOTH );
 			$page = max( 1, isset( $_GET['paged'] ) ? absint( $_GET['paged'] ) : 1 ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			echo '<p>' . esc_html( (string) count( $filtered ) ) . ' variables</p><table class="widefat striped"><thead><tr><th scope="col">Variable</th><th scope="col">Type</th><th scope="col">Value policy</th><th scope="col">Site editing</th><th scope="col">Setup</th></tr></thead><tbody>';
@@ -232,6 +236,10 @@ class Fleet_Admin {
 				if ( 'definition' === $task ) {
 					if ( ( $in['schema_hash'] ?? '' ) !== Fleet::hash( Fleet::definitions() ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
 					$in['sites'] = is_array( $in['sites'] ?? null ) ? $in['sites'] : preg_split( '/[\s,]+/', $in['sites'] ?? '' ); Fleet::save_definition( (string) ( $in['key'] ?? '' ), $in, (string) ( $in['schema_hash'] ?? '' ) ); $url = self::url( array( 'tab' => 'definitions', 'saved' => 1 ) );
+				} elseif ( 'import-apply' === $task ) {
+					$document = Fleet_Transfer::decode( (string) ( $in['document'] ?? '' ) );
+					$written = Fleet_Transfer::apply_import( $document, (string) ( $in['expected'] ?? '' ) );
+					$url = self::url( array( 'tab' => 'definitions', 'imported' => count( $written ) ) );
 				} elseif ( 'bulk' === $task ) {
 					$ids = is_array( $in['ids'] ?? null ) ? $in['ids'] : preg_split( '/[\s,]+/', $in['ids'] ?? '' );
 					// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Exact relationship-key lookup uses the core blogmeta meta_key index; no meta_value comparison.
@@ -246,5 +254,79 @@ class Fleet_Admin {
 		check_ajax_referer( 'brand_fleet_batch', 'nonce' );
 		try { $j = Fleet_Jobs::step( sanitize_text_field( wp_unslash( $_POST['id'] ?? '' ) ), absint( $_POST['cursor'] ?? 0 ), ! empty( $_POST['confirm'] ) ); wp_send_json_success( array( 'cursor' => $j['cursor'], 'phase' => $j['phase'], 'total' => count( $j['ids'] ) ) ); }
 		catch ( \Throwable $e ) { wp_send_json_error( $e->getMessage(), 400 ); }
+	}
+	public function export(): void {
+		check_admin_referer( 'brand_fleet_export' );
+		if ( ! Fleet::network_admin() ) { wp_die( esc_html__( 'Network administrator permission required.', 'brand-fleet' ), 'Brand Fleet', array( 'response' => 403 ) ); }
+		$document = Fleet_Transfer::export();
+		header( 'Content-Type: application/json; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="brand-fleet-definitions.json"' );
+		header( 'X-Content-Type-Options: nosniff' );
+		echo wp_json_encode( $document, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+		exit;
+	}
+	/** Preview submits back to this same admin page (not admin-post.php) so it renders inside wp-admin chrome. */
+	private function import_view(): void {
+		$preview = null; $raw = ''; $error = null;
+		if ( 'POST' === ( $_SERVER['REQUEST_METHOD'] ?? '' ) ) {
+			check_admin_referer( 'brand_fleet_import_preview' );
+			try {
+				if ( ! empty( $_FILES['import_file']['tmp_name'] ) && is_uploaded_file( $_FILES['import_file']['tmp_name'] ) ) {
+					if ( ( $_FILES['import_file']['size'] ?? 0 ) > 1_048_576 ) { throw new \InvalidArgumentException( 'File is larger than the 1 MB limit.' ); }
+					$raw = (string) file_get_contents( $_FILES['import_file']['tmp_name'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents -- Reading a just-uploaded tmp file validated by is_uploaded_file() above, not a remote or user-supplied path.
+				} else {
+					$raw = (string) wp_unslash( $_POST['document'] ?? '' ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Parsed and size-checked by Fleet_Transfer::decode() below; nonce checked above.
+				}
+				$document = Fleet_Transfer::decode( $raw );
+				$preview = Fleet_Transfer::preview_import( $document );
+			} catch ( \Throwable $e ) {
+				$error = $e->getMessage();
+			}
+		}
+		$this->import_form( $preview, $raw, $error );
+	}
+	private function import_form( ?array $preview, string $raw, ?string $error ): void {
+		echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'definitions' ) ) ) . '">← All variables</a></p>';
+		if ( $error ) { echo '<div class="notice notice-error"><p>' . esc_html( $error ) . '</p></div>'; }
+		if ( $preview ) {
+			$rows = $preview['rows'];
+			$counts = array_count_values( array_column( $rows, 'status' ) );
+			$writable = array_filter( $rows, static fn( $row ) => in_array( $row['status'], array( 'new', 'changed' ), true ) );
+			$any_kept_delegation = array_filter( $rows, static fn( $row ) => ! empty( $row['kept_delegation'] ) );
+			echo '<h2>Import preview</h2>';
+			echo '<p>' . esc_html( implode( ' · ', array_map( static fn( $status, $count ) => ucfirst( $status ) . ': ' . $count, array_keys( $counts ), $counts ) ) ) . '</p>';
+			if ( $any_kept_delegation ) {
+				echo '<p>A key that already allows selected sites to edit it keeps that delegation, instead of being reset to network admins only just because the export dropped it.</p>';
+			}
+			echo '<table class="widefat striped"><thead><tr><th scope="col">Key</th><th scope="col">Label</th><th scope="col">Status</th><th scope="col">Detail</th></tr></thead><tbody>';
+			foreach ( $rows as $key => $row ) {
+				echo '<tr><td><code>' . esc_html( $key ) . '</code></td><td>' . esc_html( $row['label'] ) . '</td><td>' . esc_html( ucfirst( $row['status'] ) ) . '</td><td>';
+				if ( 'rejected' === $row['status'] ) { echo esc_html( $row['reason'] ); }
+				elseif ( 'changed' === $row['status'] ) {
+					foreach ( $row['diff'] as $field => $change ) {
+						echo '<p><strong>' . esc_html( $field ) . '</strong>: <code>' . esc_html( wp_json_encode( $change['before'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ) . '</code> → <code>' . esc_html( wp_json_encode( $change['after'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ) . '</code></p>';
+					}
+				}
+				echo '</td></tr>';
+			}
+			if ( ! $rows ) { echo '<tr><td colspan="4">No definitions found in this file.</td></tr>'; }
+			echo '</tbody></table>';
+			if ( $writable ) {
+				self::begin( 'import-apply' );
+				echo '<textarea style="display:none" name="document">' . esc_textarea( $raw ) . '</textarea><input type="hidden" name="expected" value="' . esc_attr( $preview['schema_hash'] ) . '">';
+				submit_button( 'Apply import' );
+				echo '</form>';
+			} else {
+				echo '<p>Nothing to import — all keys are unchanged or rejected.</p>';
+			}
+			echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'definitions', 'view' => 'import' ) ) ) . '">Preview a different file</a></p>';
+			return;
+		}
+		echo '<h2>Import definitions</h2><p>Paste the JSON from an exported network, or upload the downloaded file. You will always see a full preview — new, changed, unchanged, and rejected keys — before anything is written. Only definitions move; per-site values and site delegation lists are never imported.</p>';
+		echo '<form method="post" enctype="multipart/form-data" action="' . esc_url( self::url( array( 'tab' => 'definitions', 'view' => 'import' ) ) ) . '">';
+		wp_nonce_field( 'brand_fleet_import_preview' );
+		echo '<p><label>Upload a file<br><input type="file" name="import_file" accept=".json"></label></p><p><label>Or paste JSON<br><textarea class="large-text" rows="10" name="document">' . esc_textarea( $raw ) . '</textarea></label></p>';
+		submit_button( 'Preview import' );
+		echo '</form>';
 	}
 }

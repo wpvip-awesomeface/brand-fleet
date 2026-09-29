@@ -55,10 +55,12 @@ class Fleet_Transfer {
 			$key = (string) $key;
 			$input = is_array( $input ) ? $input : array();
 			$existing = $defs[ $key ] ?? null;
+			$kept_delegation = false;
 			// Export always downgrades access:selected to none; re-importing onto the same key must not silently drop delegation.
 			if ( $existing && 'selected' === $existing['access'] && 'none' === ( $input['access'] ?? 'none' ) ) {
 				$input['access'] = 'selected';
 				$input['sites']  = $existing['sites'];
+				$kept_delegation = true;
 			}
 			try {
 				$d = Fleet::validate_definition( $defs, $key, $input );
@@ -83,6 +85,7 @@ class Fleet_Transfer {
 			} else {
 				$rows[ $key ] = array( 'status' => 'unchanged', 'label' => $d['label'] );
 			}
+			if ( $kept_delegation ) { $rows[ $key ]['kept_delegation'] = true; }
 		}
 		return array( 'rows' => $rows, 'accepted' => $accepted );
 	}

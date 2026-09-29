@@ -64,8 +64,16 @@ class Fleet {
 	private static function write_definition( string $key, array $input, string $expected ): void {
 		if ( '' !== $expected && ! hash_equals( $expected, self::hash( self::definitions() ) ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
 		if ( ! self::network_admin() ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
-		if ( ! preg_match( '/^[a-z][a-z0-9_]{0,47}$/D', $key ) || 'master_site' === $key ) { throw new \InvalidArgumentException( 'Use a stable lowercase variable key, up to 48 characters.' ); }
 		$defs = self::definitions();
+		$d = self::validate_definition( $defs, $key, $input );
+		$defs[ $key ] = $d;
+		update_network_option( get_current_network_id(), self::SCHEMA, $defs );
+		self::audit( 'definition', 0, array( $key ) );
+		Fleet_Cache::schedule();
+	}
+	/** Pure field-validation rules, shared by the single-definition save path and definition import. */
+	public static function validate_definition( array $defs, string $key, array $input ): array {
+		if ( ! preg_match( '/^[a-z][a-z0-9_]{0,47}$/D', $key ) || 'master_site' === $key ) { throw new \InvalidArgumentException( 'Use a stable lowercase variable key, up to 48 characters.' ); }
 		if ( ! isset( $defs[ $key ] ) && count( $defs ) >= 200 ) { throw new \InvalidArgumentException( 'This release supports 200 definitions per network.' ); }
 		$type = $input['type'] ?? 'text';
 		if ( ! in_array( $type, array( 'text', 'textarea', 'url', 'email', 'color', 'number' ), true ) ) { throw new \InvalidArgumentException( 'Unsupported variable type.' ); }
@@ -75,10 +83,7 @@ class Fleet {
 		foreach ( $d['sites'] as $id ) { if ( ! self::site( $id ) ) { throw new \InvalidArgumentException( 'Selected locations must belong to this network.' ); } }
 		$d['default'] = self::clean( $input['default'] ?? '', $d );
 		if ( 'network' === $d['scope'] && $d['required'] && '' === $d['default'] ) { throw new \InvalidArgumentException( 'Required network variables need a default.' ); }
-		$defs[ $key ] = $d;
-		update_network_option( get_current_network_id(), self::SCHEMA, $defs );
-		self::audit( 'definition', 0, array( $key ) );
-		Fleet_Cache::schedule();
+		return $d;
 	}
 
 	public static function profile( int $site ): array {

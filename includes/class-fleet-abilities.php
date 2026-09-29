@@ -33,6 +33,19 @@ class Fleet_Abilities {
 			'Network-admin fleet operation. Creates a new site from an existing location: copies its pages, posts, synced patterns, navigation, templates, template parts, global styles and design options, points copied links at the new site, gives it the same hub-managed pages, and enrolls it with the supplied variables (required clone fields such as business_name and location_name must be supplied). Group and main data source default to the source location\'s. Media stays in the source library. The new site is private unless public=true. Requires confirm=true. Inspect the source first.'
 		);
 		$this->ability( 'advance-bulk', array( 'id' => array( 'type' => 'string' ), 'cursor' => array( 'type' => 'integer', 'minimum' => 0 ), 'confirm' => array( 'type' => 'boolean', 'default' => false ) ), array( 'id', 'cursor' ), static fn( $in ) => Fleet_Jobs::step( $in['id'], $in['cursor'], $in['confirm'] ?? false ) );
+		$this->ability( 'export-definitions', array(), array(), static fn( $in ) => Fleet_Transfer::export(), true );
+		$this->ability(
+			'import-definitions',
+			array( 'document' => $object, 'preview' => array( 'type' => 'boolean', 'default' => true ), 'confirm' => array( 'type' => 'boolean', 'default' => false ), 'expected' => array( 'type' => 'string' ) ),
+			array( 'document' ),
+			static function ( $in ) {
+				if ( ! empty( $in['confirm'] ) ) {
+					if ( empty( $in['expected'] ) ) { throw new \InvalidArgumentException( 'Preview first and pass back its expected hash.' ); }
+					return array( 'written' => Fleet_Transfer::apply_import( $in['document'], $in['expected'] ) );
+				}
+				return Fleet_Transfer::preview_import( $in['document'] );
+			}
+		);
 	}
 	private function ability( string $name, array $properties, array $required, callable $run, bool $read = false, string $description = '' ): void {
 		wp_register_ability( 'brand-fleet/' . $name, array( 'label' => 'Brand Fleet: ' . $name, 'description' => $description ? $description : 'Network-admin fleet operation. Inspect first; bulk writes require completed preview and confirm=true. Null values reset inheritance. Never publishes sites or pages.', 'category' => 'brand-fleet', 'input_schema' => array( 'type' => 'object', 'properties' => $properties, 'required' => $required, 'additionalProperties' => false ), 'permission_callback' => array( Fleet::class, 'network_admin' ), 'execute_callback' => static function ( $input ) use ( $run ) { try { return $run( $input ?? array() ); } catch ( \Throwable $e ) { return new \WP_Error( 'brand_fleet_error', $e->getMessage() ); } }, 'meta' => array( 'mcp' => array( 'public' => true ), 'annotations' => array( 'readonly' => $read, 'destructive' => false, 'idempotent' => $read ) ) ) );

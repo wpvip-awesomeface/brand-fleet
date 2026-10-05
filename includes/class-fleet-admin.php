@@ -277,12 +277,13 @@ class Fleet_Admin {
 	/** Preview submits back to this same admin page (not admin-post.php) so it renders inside wp-admin chrome. */
 	private function import_view(): void {
 		$preview = null; $raw = ''; $error = null;
-		if ( 'POST' === ( $_SERVER['REQUEST_METHOD'] ?? '' ) ) {
+		if ( 'POST' === sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ?? '' ) ) ) {
 			check_admin_referer( 'brand_fleet_import_preview' );
 			try {
-				if ( ! empty( $_FILES['import_file']['tmp_name'] ) && is_uploaded_file( $_FILES['import_file']['tmp_name'] ) ) {
-					if ( ( $_FILES['import_file']['size'] ?? 0 ) > 1_048_576 ) { throw new \InvalidArgumentException( 'File is larger than the 1 MB limit.' ); }
-					$raw = (string) file_get_contents( $_FILES['import_file']['tmp_name'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents -- Reading a just-uploaded tmp file validated by is_uploaded_file() above, not a remote or user-supplied path.
+				$tmp = sanitize_text_field( wp_unslash( $_FILES['import_file']['tmp_name'] ?? '' ) );
+				if ( '' !== $tmp && is_uploaded_file( $tmp ) ) {
+					if ( absint( $_FILES['import_file']['size'] ?? 0 ) > 1_048_576 ) { throw new \InvalidArgumentException( 'File is larger than the 1 MB limit.' ); }
+					$raw = (string) file_get_contents( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_get_contents, WordPressVIPMinimum.Performance.FetchingRemoteData.FileGetContentsUnknown -- Local tmp file validated by is_uploaded_file() above; never a remote URL.
 				} else {
 					$raw = (string) wp_unslash( $_POST['document'] ?? '' ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Parsed and size-checked by Fleet_Transfer::decode() below; nonce checked above.
 				}

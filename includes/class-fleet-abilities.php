@@ -23,7 +23,10 @@ class Fleet_Abilities {
 			Fleet::save_definition( $in['key'], $in['definition'], $in['expected'] ); return array( 'saved' => $in['key'] );
 		} );
 		$this->ability( 'configure-site', array( 'site_id' => $integer, 'values' => $object, 'connections' => $object, 'expected' => array( 'type' => 'string' ) ), array( 'site_id', 'values', 'expected' ), static fn( $in ) => Fleet::save_profile( $in['site_id'], $in['values'], $in['connections'] ?? null, $in['expected'] ) );
-		$this->ability( 'preview-bulk', array( 'site_ids' => array( 'type' => 'array', 'items' => $integer, 'minItems' => 1, 'maxItems' => 10000 ), 'values' => $object ), array( 'site_ids', 'values' ), static fn( $in ) => Fleet_Jobs::start( $in['site_ids'], $in['values'] ) );
+		$bulk = 'Network-admin fleet operation. Bulk batches run in the background on VIP cron: preview-bulk starts a preview, bulk-status reports progress (poll it, about once a minute), advance-bulk with confirm=true applies a ready preview, cancel-bulk stops one. Sites changed after preview are skipped. Null values reset inheritance. Never publishes sites or pages.';
+		$this->ability( 'preview-bulk', array( 'site_ids' => array( 'type' => 'array', 'items' => $integer, 'minItems' => 1, 'maxItems' => 10000 ), 'values' => $object ), array( 'site_ids', 'values' ), static fn( $in ) => Fleet_Jobs::view( Fleet_Jobs::start( $in['site_ids'], $in['values'] ) ), false, $bulk );
+		$this->ability( 'bulk-status', array( 'offset' => array( 'type' => 'integer', 'minimum' => 0, 'default' => 0 ) ), array(), static fn( $in ) => Fleet_Jobs::view( Fleet_Jobs::get(), (int) ( $in['offset'] ?? 0 ) ), true, $bulk . ' Read-only. offset pages through result rows, 25 at a time.' );
+		$this->ability( 'cancel-bulk', array( 'id' => array( 'type' => 'string' ) ), array( 'id' ), static fn( $in ) => Fleet_Jobs::view( Fleet_Jobs::cancel( $in['id'] ) ), false, $bulk . ' Sites already updated keep their new values.' );
 		$this->ability(
 			'clone-site',
 			array( 'source_id' => $integer, 'slug' => array( 'type' => 'string', 'pattern' => '^[a-z0-9-]{1,63}$' ), 'title' => array( 'type' => 'string', 'minLength' => 1 ), 'values' => $object, 'group_id' => array( 'type' => 'integer', 'minimum' => 0 ), 'main_source_id' => array( 'type' => 'integer', 'minimum' => 0 ), 'public' => array( 'type' => 'boolean', 'default' => false ), 'confirm' => array( 'type' => 'boolean', 'default' => false ) ),
@@ -32,7 +35,7 @@ class Fleet_Abilities {
 			false,
 			'Network-admin fleet operation. Creates a new site from an existing location: copies its pages, posts, synced patterns, navigation, templates, template parts, global styles and design options, points copied links at the new site, gives it the same hub-managed pages, and enrolls it with the supplied variables (required clone fields such as business_name and location_name must be supplied). Group and main data source default to the source location\'s. Media stays in the source library. The new site is private unless public=true. Requires confirm=true. Inspect the source first.'
 		);
-		$this->ability( 'advance-bulk', array( 'id' => array( 'type' => 'string' ), 'cursor' => array( 'type' => 'integer', 'minimum' => 0 ), 'confirm' => array( 'type' => 'boolean', 'default' => false ) ), array( 'id', 'cursor' ), static fn( $in ) => Fleet_Jobs::step( $in['id'], $in['cursor'], $in['confirm'] ?? false ) );
+		$this->ability( 'advance-bulk', array( 'id' => array( 'type' => 'string' ), 'cursor' => array( 'type' => 'integer', 'minimum' => 0 ), 'confirm' => array( 'type' => 'boolean', 'default' => false ), 'offset' => array( 'type' => 'integer', 'minimum' => 0, 'default' => 0 ) ), array( 'id', 'cursor' ), static fn( $in ) => Fleet_Jobs::view( Fleet_Jobs::step( $in['id'], $in['cursor'], $in['confirm'] ?? false ), (int) ( $in['offset'] ?? 0 ) ), false, $bulk . ' Without confirm, processes up to 25 more sites now (optional; the background runner continues either way).' );
 		$this->ability( 'export-definitions', array(), array(), static fn( $in ) => Fleet_Transfer::export(), true );
 		$this->ability(
 			'import-definitions',

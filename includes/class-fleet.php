@@ -9,10 +9,13 @@ class Fleet {
 	const PROFILE = 'brand_fleet_profile';
 	/** Indexed site-meta marker so Sites in Fleet can list managed sites first. */
 	const MANAGED = 'brand_fleet_managed';
-	private static bool $bulk_audit = false;
+	/** Exception code for a held lock: callers may wait and retry. */
+	const BUSY = 409;
+	/** Bulk writes are audited and purged once per checkpoint by Fleet_Jobs, not once per site. */
+	private static bool $bulk = false;
 	public static function bulk_write( callable $callback ) {
-		self::$bulk_audit = true;
-		try { return $callback(); } finally { self::$bulk_audit = false; }
+		self::$bulk = true;
+		try { return $callback(); } finally { self::$bulk = false; }
 	}
 
 	public static function network_admin(): bool {
@@ -173,20 +176,23 @@ class Fleet {
 			if ( $current ) { update_site_meta( $site, 'brand_fleet_' . $relation . '_' . $current, 1 ); }
 		}
 		self::audit( 'site', $site, array_keys( $patch ) );
-		Fleet_Cache::schedule( $site );
+		if ( ! self::$bulk ) { Fleet_Cache::schedule( $site ); }
 		return $p;
 	}
 
-	/** One-time index backfill for profiles created before managed-first listing. */
-	public static function index_managed_sites(): void {
-		if ( get_network_option( get_current_network_id(), 'brand_fleet_managed_index', false ) ) { return; }
-		$offset = 0;
+	/** One-time index backfill for profiles created before managed-first listing, resumable across requests so large networks never time out. */
+	public static function index_managed_sites( int $limit = 200 ): void {
+		$network = get_current_network_id();
+		if ( get_network_option( $network, 'brand_fleet_managed_index', false ) ) { return; }
+		$offset = (int) get_network_option( $network, 'brand_fleet_managed_index_offset', 0 ); $stop = $offset + $limit;
 		do {
-			$ids = get_sites( array( 'network_id' => get_current_network_id(), 'number' => 100, 'offset' => $offset, 'fields' => 'ids', 'orderby' => 'id', 'order' => 'ASC' ) );
+			$ids = get_sites( array( 'network_id' => $network, 'number' => 100, 'offset' => $offset, 'fields' => 'ids', 'orderby' => 'id', 'order' => 'ASC' ) );
 			foreach ( $ids as $id ) { if ( self::profile( (int) $id ) ) { update_site_meta( (int) $id, self::MANAGED, 1 ); } }
 			$offset += 100;
-		} while ( count( $ids ) === 100 );
-		update_network_option( get_current_network_id(), 'brand_fleet_managed_index', true );
+		} while ( count( $ids ) === 100 && $offset < $stop );
+		if ( count( $ids ) === 100 ) { update_network_option( $network, 'brand_fleet_managed_index_offset', $offset ); return; }
+		update_network_option( $network, 'brand_fleet_managed_index', true );
+		delete_network_option( $network, 'brand_fleet_managed_index_offset' );
 	}
 	/** Managed sites first, then unenrolled, each by site ID. Queried per state so sorting applies before pagination. */
 	public static function listed_sites( string $search, int $page ): array {
@@ -205,27 +211,36 @@ class Fleet {
 		}
 		return $sites;
 	}
-	public static function locked( string $name, callable $callback ) {
-		$main = (int) get_main_site_id();
+	/** Run $callback holding a named network lock, waiting up to $wait tenths of a second for it. */
+	public static function locked( string $name, callable $callback, int $wait = 0 ) {
 		$key = 'brand_fleet_lock_' . sanitize_key( $name );
+		for ( $try = 0; ! self::acquire( $key ); ++$try ) {
+			if ( $try >= $wait ) { throw new \RuntimeException( 'Another update is running. Retry shortly.', self::BUSY ); }
+			usleep( 100000 );
+		}
+		try { return $callback(); } finally { self::release( $key ); }
+	}
+	/** Memcached add() is atomic, so two requests can never both take a lock; locks expire after five minutes. */
+	private static function acquire( string $key ): bool {
+		if ( wp_using_ext_object_cache() ) { return wp_cache_add( $key, time(), 'brand_fleet_locks', 300 ); }
+		$main = (int) get_main_site_id();
 		$old = (int) get_blog_option( $main, $key, 0 );
 		if ( $old && $old < time() - 300 ) { delete_blog_option( $main, $key ); }
-		if ( ! add_blog_option( $main, $key, time() ) ) { throw new \RuntimeException( 'Another update is running. Retry shortly.' ); }
-		try { return $callback(); } finally { delete_blog_option( $main, $key ); }
+		return add_blog_option( $main, $key, time() );
+	}
+	private static function release( string $key ): void {
+		if ( wp_using_ext_object_cache() ) { wp_cache_delete( $key, 'brand_fleet_locks' ); return; }
+		delete_blog_option( (int) get_main_site_id(), $key );
 	}
 
 	public static function hash( array $value ): string { return hash( 'sha256', wp_json_encode( $value ) ); }
 	public static function audit( string $action, int $site, array $keys ): void {
-		if ( self::$bulk_audit ) { return; }
+		if ( self::$bulk ) { return; }
 		self::record_activity( array( 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => $action, 'site' => $site, 'keys' => $keys ) );
 	}
 	public static function audit_job( array $job ): void {
-		$counts = array_count_values( array_column( $job['rows'], 'status' ) );
-		$details = array();
-		foreach ( $job['rows'] as $row ) {
-			if ( count( $details ) >= 20 ) { break; }
-			if ( in_array( $row['status'], array( 'updated', 'skipped' ), true ) ) { $details[] = array_intersect_key( $row, array_flip( array( 'site', 'status', 'error' ) ) ); }
-		}
+		$counts = Fleet_Jobs::counts( $job );
+		$details = $job['sample'] ?? array();
 		self::record_activity( array( 'batch' => $job['id'], 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => 'bulk', 'keys' => array_keys( $job['patch'] ), 'total' => count( $job['ids'] ), 'updated' => $counts['updated'] ?? 0, 'skipped' => $counts['skipped'] ?? 0, 'phase' => $job['phase'], 'details' => $details ) );
 	}
 	private static function record_activity( array $entry ): void {
@@ -236,6 +251,6 @@ class Fleet {
 			}
 			$log[] = $entry;
 			update_network_option( get_current_network_id(), 'brand_fleet_audit', array_slice( $log, -100 ) );
-		} );
+		}, 20 );
 	}
 }

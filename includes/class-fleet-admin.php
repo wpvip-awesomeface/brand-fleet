@@ -190,7 +190,7 @@ class Fleet_Admin {
 		if ( count( $sites ) > 25 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'paged' => $page + 1, 'q' => $q ) ) ) . '">Next</a>'; } echo '</p>';
 	}
 	private function bulk(): void {
-		echo '<h2>Prepare a bulk update</h2><p>Preview before applying. Changed sites are skipped instead of overwriting edits made after preview. Batches are 25 sites; you may close this page and resume later.</p>'; self::begin( 'bulk' );
+		echo '<h2>Prepare a bulk update</h2><p>Preview before applying. Changed sites are skipped instead of overwriting edits made after preview. Batches keep running in the background, so you can close this page and come back to check progress.</p>'; self::begin( 'bulk' );
 		Site_Picker::render( 'ids', 'Choose sites to update', array(), true ); Site_Picker::render( 'group_id', 'Or choose a brand hub to update all its enrolled sites', array(), false, 'Use selected sites above' );
 		echo '<p class="description">Choosing a hub replaces the individual site selection for this batch. Review the preview before applying.</p>';
 		self::select( 'variable', 'Variable', array_map( static fn( $d ) => $d['label'], array_filter( Fleet::definitions(), static fn( $d ) => 'location' === $d['scope'] ) ), '' );
@@ -202,21 +202,26 @@ class Fleet_Admin {
 		}
 		wp_enqueue_script( 'brand-fleet-batch', BRAND_FLEET_URL . 'assets/fleet-batch.js', array(), BRAND_FLEET_VERSION, true );
 		echo '<div id="brand-fleet-current-batch">';
-		echo '<h2>Current batch</h2><p id="brand-fleet-batch-status">' . esc_html( $j['phase'] . ' · ' . $j['cursor'] . '/' . count( $j['ids'] ) ) . '</p>';
+		$labels = array( 'preview' => 'Preparing preview', 'ready' => 'Preview ready — review, then apply', 'apply' => 'Applying', 'complete' => 'Complete', 'cancelled' => 'Cancelled', 'stopped' => 'Stopped' );
+		echo '<h2>Current batch</h2><p id="brand-fleet-batch-status">' . esc_html( ( $labels[ $j['phase'] ] ?? $j['phase'] ) . ' · ' . $j['cursor'] . '/' . count( $j['ids'] ) . ' sites' ) . '</p>';
+		if ( ! empty( $j['error'] ) ) { echo '<div class="notice notice-error inline"><p>' . esc_html( $j['error'] ) . '</p></div>'; }
+		if ( in_array( $j['phase'], array( 'preview', 'apply' ), true ) ) { echo '<p>This runs in the background. You can close this page; progress is saved after every 25 sites.</p>'; }
 		$result_page = max( 1, isset( $_GET['result_page'] ) ? absint( $_GET['result_page'] ) : 1 ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$counts = array_count_values( array_column( $j['rows'], 'status' ) );
+		$counts = Fleet_Jobs::counts( $j );
 		echo '<p>' . esc_html( implode( ' · ', array_map( static fn( $status, $count ) => $status . ': ' . $count, array_keys( $counts ), $counts ) ) ) . '</p><p>Before and after show site overrides. An empty object means the value is inherited.</p><table class="widefat striped"><thead><tr><th>Site</th><th>Status</th><th>Before</th><th>After</th><th>Details</th></tr></thead><tbody>';
-		foreach ( array_slice( $j['rows'], ( $result_page - 1 ) * 25, 25 ) as $row ) {
+		$rows = Fleet_Jobs::rows( $j, ( $result_page - 1 ) * 25, 26 );
+		foreach ( array_slice( $rows, 0, 25 ) as $row ) {
 			echo '<tr><td>' . esc_html( Site_Picker::label( (int) $row['site'] ) ) . '</td><td>' . esc_html( $row['status'] ) . '</td><td><code>' . esc_html( wp_json_encode( (object) ( $row['before'] ?? array() ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ) . '</code></td><td><code>' . esc_html( wp_json_encode( (object) ( $row['after'] ?? array() ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ) . '</code></td><td>' . esc_html( $row['error'] ?? '' ) . '</td></tr>';
 		}
 		echo '</tbody></table><p>';
 		if ( $result_page > 1 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'bulk', 'batch' => $j['id'], 'result_page' => $result_page - 1 ) ) ) . '">Previous results</a> '; }
-		if ( count( $j['rows'] ) > $result_page * 25 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'bulk', 'batch' => $j['id'], 'result_page' => $result_page + 1 ) ) ) . '">Next results</a>'; }
+		if ( count( $rows ) > 25 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'bulk', 'batch' => $j['id'], 'result_page' => $result_page + 1 ) ) ) . '">Next results</a>'; }
 		echo '</p>';
-		if ( 'complete' !== $j['phase'] ) {
-			echo '<button type="button" class="button button-primary" id="brand-fleet-batch-run">' . ( 'ready' === $j['phase'] ? 'Apply this reviewed batch' : 'Continue batch' ) . '</button>';
+		if ( in_array( $j['phase'], array( 'preview', 'ready', 'apply' ), true ) ) {
+			if ( 'ready' === $j['phase'] ) { echo '<button type="button" class="button button-primary" id="brand-fleet-batch-run">Apply this reviewed batch</button> '; }
+			echo '<button type="button" class="button" id="brand-fleet-batch-cancel">' . ( 'apply' === $j['phase'] ? 'Stop applying' : 'Discard batch' ) . '</button>';
 			wp_enqueue_script( 'brand-fleet-batch', BRAND_FLEET_URL . 'assets/fleet-batch.js', array(), BRAND_FLEET_VERSION, true );
-			wp_localize_script( 'brand-fleet-batch', 'brandFleetBatch', array( 'url' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'brand_fleet_batch' ), 'id' => $j['id'], 'cursor' => $j['cursor'], 'phase' => $j['phase'] ) );
+			wp_localize_script( 'brand-fleet-batch', 'brandFleetBatch', array( 'url' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'brand_fleet_batch' ), 'id' => $j['id'], 'cursor' => $j['cursor'], 'phase' => $j['phase'], 'labels' => $labels ) );
 		}
 		echo '</div><p id="brand-fleet-batch-changed" hidden>Your selection or update settings changed. Prepare a new preview to see the matching sites.</p>';
 	}
@@ -252,7 +257,11 @@ class Fleet_Admin {
 	}
 	public function batch(): void {
 		check_ajax_referer( 'brand_fleet_batch', 'nonce' );
-		try { $j = Fleet_Jobs::step( sanitize_text_field( wp_unslash( $_POST['id'] ?? '' ) ), absint( $_POST['cursor'] ?? 0 ), ! empty( $_POST['confirm'] ) ); wp_send_json_success( array( 'cursor' => $j['cursor'], 'phase' => $j['phase'], 'total' => count( $j['ids'] ) ) ); }
+		try {
+			$id = sanitize_text_field( wp_unslash( $_POST['id'] ?? '' ) );
+			$j = empty( $_POST['cancel'] ) ? Fleet_Jobs::step( $id, absint( $_POST['cursor'] ?? 0 ), ! empty( $_POST['confirm'] ) ) : Fleet_Jobs::cancel( $id );
+			wp_send_json_success( array( 'cursor' => $j['cursor'], 'phase' => $j['phase'], 'total' => count( $j['ids'] ), 'busy' => ! empty( $j['busy'] ) ) );
+		}
 		catch ( \Throwable $e ) { wp_send_json_error( $e->getMessage(), 400 ); }
 	}
 	public function export(): void {

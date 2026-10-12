@@ -7,13 +7,13 @@
 	const status = document.getElementById('brand-fleet-default-status');
 	let generation = 0;
 	function refresh(field) {
-		const input = field.querySelector('textarea'), override = field.querySelector('input');
+		const input = field.querySelector('[name^=brand_fleet_values]'), override = field.querySelector('[name^=brand_fleet_override]');
 		input.placeholder = field.dataset.default || 'No inherited default';
 		input.required = enroll.checked && field.dataset.required === '1' && (field.dataset.explicit === '1' || !field.dataset.default.trim() || override.checked);
 		field.querySelector('.brand-fleet-default-hint').textContent = field.dataset.explicit === '1' ? 'Enter a site-specific value (required).' : (override.checked ? 'Uses your site-specific value.' : (field.dataset.default ? 'Inherits the default shown above. Leave empty to keep inheritance.' : 'No inherited default set.' + (field.dataset.required === '1' ? ' Enter a value.' : ' Optional.')));
 	}
 	fields.forEach(field => {
-		const input = field.querySelector('textarea'), override = field.querySelector('input');
+		const input = field.querySelector('[name^=brand_fleet_values]'), override = field.querySelector('[name^=brand_fleet_override]');
 		input.addEventListener('input', () => { override.checked = input.value !== ''; refresh(field); });
 		override.addEventListener('change', () => { if (!override.checked) input.value = ''; refresh(field); });
 		refresh(field);

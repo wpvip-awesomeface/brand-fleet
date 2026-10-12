@@ -52,6 +52,7 @@ class Fleet_Onboarding {
 		echo '<h2>Site variables</h2><p>These values are applied after the selected starting site is copied. Network administrators can configure every site field, regardless of delegation.</p><p><label><input type="checkbox" name="brand_fleet_enroll" value="1">Manage this new site with Brand Fleet</label></p>';
 		wp_enqueue_script( 'brand-fleet-onboarding', BRAND_FLEET_URL . 'assets/fleet-onboarding.js', array(), BRAND_FLEET_VERSION, true );
 		wp_localize_script( 'brand-fleet-onboarding', 'brandFleetOnboarding', array( 'url' => admin_url( 'admin-ajax.php' ), 'nonce' => wp_create_nonce( 'brand_fleet_site_defaults' ) ) );
+		Fleet_Admin::enqueue_fields();
 		wp_nonce_field( 'brand_fleet_create', 'brand_fleet_create_nonce' );
 		Site_Picker::render( 'brand_fleet_group_id', 'Connected brand hub' );
 		Site_Picker::render( 'brand_fleet_source_id', 'Main data source', array(), false, 'Network defaults' );
@@ -61,7 +62,9 @@ class Fleet_Onboarding {
 			if ( 'network' === $d['scope'] ) { echo esc_html( $d['default'] ) . '<p>Network value — change in Brand Fleet → Variable definitions.</p>'; }
 			else {
 				$explicit = $d['required'] && $d['clone'];
-				echo '<div class="brand-fleet-default-field" data-key="' . esc_attr( $key ) . '" data-default="' . esc_attr( $d['default'] ) . '" data-required="' . ( $d['required'] ? '1' : '0' ) . '" data-explicit="' . ( $explicit ? '1' : '0' ) . '"><textarea class="large-text" rows="2" name="brand_fleet_values[' . esc_attr( $key ) . ']" aria-label="' . esc_attr( $d['label'] ) . '" placeholder="' . esc_attr( $d['default'] ?: 'No inherited default' ) . '"></textarea><p class="description brand-fleet-default-hint">' . esc_html( $explicit ? 'Enter a site-specific value (required).' : ( $d['default'] ? 'Inherits network default unless you type a value.' : 'No inherited default set.' ) ) . '</p><label><input type="checkbox" name="brand_fleet_override[' . esc_attr( $key ) . ']" value="1"> Override inherited value (check to intentionally save a blank)</label></div>';
+				echo '<div class="brand-fleet-default-field" data-key="' . esc_attr( $key ) . '" data-default="' . esc_attr( $d['default'] ) . '" data-required="' . ( $d['required'] ? '1' : '0' ) . '" data-explicit="' . ( $explicit ? '1' : '0' ) . '">';
+				Fleet_Admin::input( $d['type'], 'brand_fleet_values[' . $key . ']', '', array( 'aria-label' => $d['label'], 'placeholder' => $d['default'] ?: 'No inherited default' ) );
+				echo '<p class="description brand-fleet-default-hint">' . esc_html( $explicit ? 'Enter a site-specific value (required).' : ( $d['default'] ? 'Inherits network default unless you type a value.' : 'No inherited default set.' ) ) . '</p><label><input type="checkbox" name="brand_fleet_override[' . esc_attr( $key ) . ']" value="1"> Override inherited value (check to intentionally save a blank)</label></div>';
 
 			}
 			echo '</td></tr>';

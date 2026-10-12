@@ -11,6 +11,10 @@ class Fleet {
 	const MANAGED = 'brand_fleet_managed';
 	/** Exception code for a held lock: callers may wait and retry. */
 	const BUSY = 409;
+	/** Value types and their admin labels. A definition's type never changes after creation. */
+	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number' );
+	/** Network option: custom field keys whose front-end values swap {{tokens}}. */
+	const META_KEYS = 'brand_fleet_meta_keys';
 	/** Bulk writes are audited and purged once per checkpoint by Fleet_Jobs, not once per site. */
 	private static bool $bulk = false;
 	public static function bulk_write( callable $callback ) {
@@ -43,15 +47,22 @@ class Fleet {
 		if ( ! is_string( $value ) || strlen( $value ) > 5000 ) { throw new \InvalidArgumentException( 'Values must be strings of at most 5,000 bytes.' ); }
 		switch ( $definition['type'] ) {
 			case 'url':
+			case 'image':
 				if ( '' === $value ) { return ''; }
 				$url = esc_url_raw( $value, array( 'https', 'http' ) );
-				if ( ! $url || ! wp_http_validate_url( $url ) ) { throw new \InvalidArgumentException( 'Enter a valid public http or https URL.' ); }
+				// Media Library uploads are always accepted, even on hosts the public-URL check cannot resolve.
+				$uploads = 'image' === $definition['type'] ? (string) ( wp_get_upload_dir()['baseurl'] ?? '' ) : '';
+				if ( $url && $uploads && str_starts_with( set_url_scheme( $url, 'https' ), trailingslashit( set_url_scheme( $uploads, 'https' ) ) ) ) { return $url; }
+				if ( ! $url || ! wp_http_validate_url( $url ) ) { throw new \InvalidArgumentException( 'image' === $definition['type'] ? 'Enter a valid image URL, or choose an image from the Media Library.' : 'Enter a valid public http or https URL.' ); }
 				return $url;
+			case 'phone':
+				if ( '' !== $value && ! preg_match( '/^[0-9+().\s\-#*x]{3,40}$/iD', trim( $value ) ) ) { throw new \InvalidArgumentException( 'Enter a phone number using digits, spaces, +, -, ( ) or x for an extension.' ); }
+				return sanitize_text_field( $value );
 			case 'email':
 				if ( '' !== $value && ! is_email( $value ) ) { throw new \InvalidArgumentException( 'Enter a valid email address.' ); }
 				return sanitize_email( $value );
 			case 'color':
-				if ( '' !== $value && ! sanitize_hex_color( $value ) ) { throw new \InvalidArgumentException( 'Enter a hex color.' ); }
+				if ( '' !== $value && ! sanitize_hex_color( $value ) ) { throw new \InvalidArgumentException( 'Enter a hex color, for example #1e73be.' ); }
 				return $value;
 			case 'number':
 				if ( '' !== $value && ! preg_match( '/^-?\d+(\.\d+)?$/D', $value ) ) { throw new \InvalidArgumentException( 'Enter a decimal number.' ); }
@@ -79,7 +90,7 @@ class Fleet {
 		if ( ! preg_match( '/^[a-z][a-z0-9_]{0,47}$/D', $key ) || 'master_site' === $key ) { throw new \InvalidArgumentException( 'Use a stable lowercase variable key, up to 48 characters.' ); }
 		if ( ! isset( $defs[ $key ] ) && count( $defs ) >= 200 ) { throw new \InvalidArgumentException( 'This release supports 200 definitions per network.' ); }
 		$type = $input['type'] ?? 'text';
-		if ( ! in_array( $type, array( 'text', 'textarea', 'url', 'email', 'color', 'number' ), true ) ) { throw new \InvalidArgumentException( 'Unsupported variable type.' ); }
+		if ( ! isset( self::TYPES[ $type ] ) ) { throw new \InvalidArgumentException( 'Unsupported variable type.' ); }
 		if ( isset( $defs[ $key ] ) && $defs[ $key ]['type'] !== $type ) { throw new \InvalidArgumentException( 'Existing types are immutable; create a new key for a different type.' ); }
 		if ( ! in_array( $input['scope'] ?? 'location', array( 'network', 'location' ), true ) || ! in_array( $input['access'] ?? 'none', array( 'all', 'selected', 'none' ), true ) ) { throw new \InvalidArgumentException( 'Choose a valid scope and delegation policy.' ); }
 		$d = array( 'label' => sanitize_text_field( $input['label'] ?? $key ), 'type' => $type, 'scope' => ( $input['scope'] ?? '' ) === 'network' ? 'network' : 'location', 'access' => in_array( $input['access'] ?? '', array( 'all', 'selected', 'none' ), true ) ? $input['access'] : 'none', 'sites' => array_values( array_unique( array_filter( array_map( 'absint', (array) ( $input['sites'] ?? array() ) ) ) ) ), 'required' => ! empty( $input['required'] ), 'clone' => ! empty( $input['clone'] ) );
@@ -87,6 +98,21 @@ class Fleet {
 		$d['default'] = self::clean( $input['default'] ?? '', $d );
 		if ( 'network' === $d['scope'] && $d['required'] && '' === $d['default'] ) { throw new \InvalidArgumentException( 'Required network variables need a default.' ); }
 		return $d;
+	}
+
+	public static function meta_keys(): array {
+		return array_values( array_filter( (array) get_network_option( get_current_network_id(), self::META_KEYS, array() ), 'is_string' ) );
+	}
+	/** Custom field keys are network configuration: up to 50 plain keys, no serialized or protected-looking values. */
+	public static function save_meta_keys( string $input ): array {
+		if ( ! self::network_admin() ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
+		$keys = array_values( array_unique( array_filter( array_map( 'trim', preg_split( '/[\s,]+/', $input ) ) ) ) );
+		foreach ( $keys as $key ) { if ( ! preg_match( '/^[A-Za-z0-9_\-]{1,191}$/D', $key ) ) { throw new \InvalidArgumentException( 'Custom field keys may use letters, numbers, - and _ only.' ); } }
+		if ( count( $keys ) > 50 ) { throw new \InvalidArgumentException( 'Choose up to 50 custom fields.' ); }
+		update_network_option( get_current_network_id(), self::META_KEYS, $keys );
+		self::audit( 'meta-keys', 0, array() );
+		Fleet_Cache::schedule();
+		return $keys;
 	}
 
 	public static function profile( int $site ): array {

@@ -27,22 +27,130 @@ class Content {
 	/** Recursion guard for nested shared-content renders. */
 	private static int $depth = 0;
 
+	/** Attributes that hold a link: tokens there must resolve to a safe URL as a whole. */
+	const URL_ATTRIBUTES = array( 'href', 'src', 'action', 'formaction', 'poster', 'cite' );
+	/** Attributes that show text to people; any variable type may appear here. */
+	const TEXT_ATTRIBUTES = array( 'alt', 'title', 'aria-label', 'aria-description', 'placeholder', 'value', 'content', 'label' );
+
 	public function init(): void {
 		// Swap tokens in any locally rendered content too, so pages authored
 		// on the master site (or one-off local pages) can use the same
 		// {{tokens}} and resolve to the current site's identity.
 		add_filter( 'the_content', array( $this, 'swap_tokens' ), 12 );
+		// Block theme headers and footers render outside the_content.
+		add_filter( 'render_block_core/template-part', array( $this, 'swap_tokens' ), 12 );
+		add_filter( 'widget_block_content', array( $this, 'swap_tokens' ), 12 );
+		// Titles, excerpts and SEO metadata are plain text.
+		$text = array( 'the_title', 'single_post_title', 'get_the_excerpt', 'wpseo_title', 'wpseo_metadesc', 'wpseo_opengraph_title', 'wpseo_opengraph_desc', 'wpseo_twitter_title', 'wpseo_twitter_description', 'rank_math/frontend/title', 'rank_math/frontend/description', 'rank_math/opengraph/facebook/og_title', 'rank_math/opengraph/facebook/og_description', 'rank_math/opengraph/twitter/twitter_title', 'rank_math/opengraph/twitter/twitter_description' );
+		/** Filters plain-text hooks whose output swaps {{tokens}}. */
+		foreach ( (array) apply_filters( 'brand_fleet_text_filters', $text ) as $hook ) { add_filter( $hook, array( $this, 'swap_text' ), 20 ); }
+		add_filter( 'document_title_parts', array( $this, 'swap_title_parts' ), 20 );
+		add_filter( 'get_post_metadata', array( $this, 'swap_meta' ), 20, 4 );
+		add_action( 'init', array( $this, 'register_binding' ) );
+		add_action( 'enqueue_block_editor_assets', array( $this, 'editor_binding' ) );
 	}
 
+	/** Raw values and types, keyed by token. */
+	private static function token_map(): array {
+		$defs = Fleet::definitions(); $map = array();
+		foreach ( Settings::tokens() as $token => $value ) { $map[ $token ] = array( (string) $value, $defs[ substr( $token, 2, -2 ) ]['type'] ?? 'text' ); }
+		return $map;
+	}
+	/** Front-end output only; wp-admin keeps showing the {{tokens}} people typed. */
+	private static function front(): bool { return ! is_admin(); }
+
 	/** Replace {{token}} placeholders with the current site's brand values. */
-	public function swap_tokens( string $html ): string {
-		$tokens = Settings::tokens();
-		// Only replace text, never attributes, scripts or markup. Values are plain text.
+	public function swap_tokens( $html ) {
+		if ( ! is_string( $html ) || ! str_contains( $html, '{{' ) ) { return $html; }
+		$map = self::token_map();
+		$tokens = array_map( static fn( $entry ) => esc_html( $entry[0] ), $map );
+		// Text first: values are plain text. Scripts and markup are never touched.
 		$parts = wp_html_split( $html );
 		foreach ( $parts as $i => $part ) {
-			if ( 0 === $i % 2 ) { $parts[ $i ] = strtr( $part, array_map( 'esc_html', $tokens ) ); }
+			if ( 0 === $i % 2 ) { $parts[ $i ] = strtr( $part, $tokens ); }
 		}
-		return implode( '', $parts );
+		$html = implode( '', $parts );
+		return str_contains( $html, '{{' ) ? self::swap_attributes( $html, $map ) : $html;
+	}
+
+	/**
+	 * Attribute values, by type: links and images resolve to escaped URLs, colors and
+	 * numbers are pre-validated, and text only lands in attributes people read. Event
+	 * handlers never change, and link attributes are re-validated as a whole URL.
+	 */
+	private static function swap_attributes( string $html, array $map ): string {
+		$tags = new \WP_HTML_Tag_Processor( $html );
+		while ( $tags->next_tag() ) {
+			foreach ( (array) $tags->get_attribute_names_with_prefix( '' ) as $name ) {
+				$value = $tags->get_attribute( $name );
+				if ( ! is_string( $value ) || ! str_contains( $value, '{{' ) || str_starts_with( $name, 'on' ) ) { continue; }
+				$is_url = in_array( $name, self::URL_ATTRIBUTES, true );
+				$swapped = preg_replace_callback(
+					'/\{\{([a-z][a-z0-9_]{0,47})\}\}/',
+					static function ( $m ) use ( $map, $name, $is_url ) {
+						if ( ! isset( $map[ $m[0] ] ) ) { return $m[0]; }
+						list( $raw, $type ) = $map[ $m[0] ];
+						if ( in_array( $type, array( 'color', 'number' ), true ) ) { return $raw; }
+						if ( in_array( $type, array( 'url', 'image' ), true ) ) { return $is_url ? $raw : strtr( esc_url_raw( $raw ), array( '(' => '%28', ')' => '%29', "'" => '%27', ';' => '%3B' ) ); }
+						if ( $is_url && in_array( $type, array( 'email', 'phone' ), true ) ) { return $raw; }
+						return in_array( $name, self::TEXT_ATTRIBUTES, true ) ? $raw : $m[0];
+					},
+					$value
+				);
+				if ( $swapped === $value ) { continue; }
+				$tags->set_attribute( $name, $is_url ? esc_url_raw( $swapped ) : $swapped );
+			}
+		}
+		return $tags->get_updated_html();
+	}
+
+	/** Plain-text hooks: titles, excerpts and SEO fields. */
+	public function swap_text( $text ) {
+		if ( ! is_string( $text ) || ! str_contains( $text, '{{' ) || ! self::front() ) { return $text; }
+		return strtr( $text, array_map( static fn( $entry ) => esc_html( $entry[0] ), self::token_map() ) );
+	}
+	public function swap_title_parts( $parts ) {
+		return is_array( $parts ) ? array_map( array( $this, 'swap_text' ), $parts ) : $parts;
+	}
+
+	/** Custom fields chosen in Variable definitions return each site's values on the front end. */
+	public function swap_meta( $value, $object_id, $meta_key, $single ) {
+		static $keys = null;
+		if ( null !== $value || ! $meta_key || ! self::front() ) { return $value; }
+		$keys = $keys ?? Fleet::meta_keys();
+		if ( ! in_array( $meta_key, $keys, true ) ) { return $value; }
+		remove_filter( 'get_post_metadata', array( $this, 'swap_meta' ), 20 );
+		$raw = get_post_meta( (int) $object_id, $meta_key, false );
+		add_filter( 'get_post_metadata', array( $this, 'swap_meta' ), 20, 4 );
+		if ( ! $raw ) { return $value; }
+		$values = array_map( static fn( $entry ) => $entry[0], self::token_map() );
+		return array_map( static fn( $item ) => is_string( $item ) ? strtr( $item, $values ) : $item, (array) $raw );
+	}
+
+	/** Block bindings: connect a heading, paragraph, image or button to a variable in the editor. */
+	public function register_binding(): void {
+		if ( ! function_exists( 'register_block_bindings_source' ) ) { return; }
+		register_block_bindings_source(
+			'brand-fleet/variable',
+			array(
+				'label'              => 'Brand Fleet variable',
+				'get_value_callback' => static function ( array $args ) {
+					$entry = self::token_map()[ '{{' . sanitize_key( $args['key'] ?? '' ) . '}}' ] ?? null;
+					if ( ! $entry ) { return null; }
+					return in_array( $entry[1], array( 'url', 'image' ), true ) ? esc_url( $entry[0] ) : esc_html( $entry[0] );
+				},
+			)
+		);
+	}
+	public function editor_binding(): void {
+		if ( ! current_user_can( 'edit_posts' ) ) { return; }
+		$fields = array();
+		foreach ( self::token_map() as $token => $entry ) {
+			$key = substr( $token, 2, -2 ); $d = Fleet::definitions()[ $key ] ?? null;
+			$fields[] = array( 'key' => $key, 'label' => $d['label'] ?? ucwords( str_replace( '_', ' ', $key ) ), 'value' => $entry[0] );
+		}
+		wp_enqueue_script( 'brand-fleet-bindings', BRAND_FLEET_URL . 'assets/fleet-bindings.js', array( 'wp-blocks' ), BRAND_FLEET_VERSION, true );
+		wp_localize_script( 'brand-fleet-bindings', 'brandFleetBindings', array( 'fields' => $fields ) );
 	}
 
 	/**

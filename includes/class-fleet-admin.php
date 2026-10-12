@@ -40,7 +40,54 @@ class Fleet_Admin {
 		foreach ( $options as $key => $text ) { echo '<option value="' . esc_attr( $key ) . '" ' . selected( $key, $value, false ) . '>' . esc_html( $text ) . '</option>'; }
 		echo '</select></label></p>';
 	}
+	/** Color picker and Media Library support for typed value inputs; uploads go to the current site's library (VIP File Service). */
+	public static function enqueue_fields(): void {
+		wp_enqueue_style( 'wp-color-picker' );
+		wp_enqueue_style( 'brand-fleet-admin', BRAND_FLEET_URL . 'assets/fleet-admin.css', array(), BRAND_FLEET_VERSION );
+		if ( current_user_can( 'upload_files' ) ) { wp_enqueue_media(); }
+		wp_enqueue_script( 'brand-fleet-fields', BRAND_FLEET_URL . 'assets/fleet-fields.js', array( 'jquery', 'wp-color-picker' ), BRAND_FLEET_VERSION, true );
+	}
+	/** One input that matches the variable type. $attrs adds aria-label, placeholder or disabled. */
+	public static function input( string $type, string $name, string $value, array $attrs = array() ): void {
+		$extra = '';
+		foreach ( $attrs as $attr => $attr_value ) { $extra .= ' ' . esc_attr( $attr ) . ( true === $attr_value ? '' : '="' . esc_attr( (string) $attr_value ) . '"' ); }
+		$base = 'name="' . esc_attr( $name ) . '"' . $extra;
+		switch ( $type ) {
+			case 'textarea':
+				echo '<textarea class="large-text" rows="3" ' . $base . '>' . esc_textarea( $value ) . '</textarea>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+				return;
+			case 'color':
+				echo '<input type="text" class="brand-fleet-color" maxlength="7" ' . $base . ' value="' . esc_attr( $value ) . '">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+				return;
+			case 'image':
+				echo '<span class="brand-fleet-image"><img class="brand-fleet-image-preview" alt="" src="' . esc_url( $value ) . '"' . ( $value ? '' : ' hidden' ) . '><input type="url" class="large-text" placeholder="https://" ' . $base . ' value="' . esc_attr( $value ) . '"><span class="brand-fleet-image-actions">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+				if ( current_user_can( 'upload_files' ) ) { echo '<button type="button" class="button brand-fleet-image-choose">Choose or upload image</button> '; }
+				echo '<button type="button" class="button-link brand-fleet-image-clear"' . ( $value ? '' : ' hidden' ) . '>Remove image</button></span></span>';
+				return;
+		}
+		$types = array( 'url' => 'url', 'email' => 'email', 'phone' => 'tel', 'number' => 'number' );
+		echo '<input type="' . esc_attr( $types[ $type ] ?? 'text' ) . '" class="' . ( in_array( $type, array( 'email', 'phone', 'number' ), true ) ? 'regular-text' : 'large-text' ) . '"' . ( 'number' === $type ? ' step="any"' : '' ) . ( 'url' === $type ? ' placeholder="https://"' : '' ) . ' ' . $base . ' value="' . esc_attr( $value ) . '">'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+	}
+	/** One input per type, with only the selected type's input enabled; JS follows the $control select. */
+	private static function typed_inputs( string $control, string $name, string $selected, string $value = '', array $attrs = array() ): void {
+		echo '<span class="brand-fleet-typed" data-control="' . esc_attr( $control ) . '">';
+		foreach ( array_keys( Fleet::TYPES ) as $type ) {
+			$on = $type === $selected;
+			echo '<span data-type="' . esc_attr( $type ) . '"' . ( $on ? '' : ' hidden' ) . '>';
+			self::input( $type, $name, $on ? $value : '', $attrs + ( $on ? array() : array( 'disabled' => true ) ) );
+			echo '</span>';
+		}
+		echo '</span>';
+	}
+	/** Read-only display: swatches for colors, thumbnails for images. */
+	public static function preview( string $type, string $value ): string {
+		if ( '' === $value ) { return '<em>Empty</em>'; }
+		if ( 'color' === $type && sanitize_hex_color( $value ) ) { return '<span class="brand-fleet-swatch" style="background:' . esc_attr( $value ) . '"></span> <code>' . esc_html( $value ) . '</code>'; }
+		if ( 'image' === $type ) { return '<img class="brand-fleet-thumb" alt="" src="' . esc_url( $value ) . '"><br><a href="' . esc_url( $value ) . '" target="_blank" rel="noopener">' . esc_html( wp_basename( (string) wp_parse_url( $value, PHP_URL_PATH ) ) ) . '</a>'; }
+		return nl2br( esc_html( $value ) );
+	}
 	public static function values( int $site ): void {
+		self::enqueue_fields();
 		$p = Fleet::profile( $site );
 		$original_hash = Fleet::hash( $p );
 		if ( ! $p ) {
@@ -54,9 +101,11 @@ class Fleet_Admin {
 			if ( ! Fleet::network_admin() && ! Fleet::editable( $d, $site ) ) { continue; }
 			$r = Fleet::resolved( $site, $key );
 			$editable = 'location' === $d['scope'] && ( Fleet::network_admin() || Fleet::editable( $d, $site ) );
-			echo '<tr><th scope="row">' . esc_html( $d['label'] ) . '<br><code>{{' . esc_html( $key ) . '}}</code>' . ( $d['required'] ? '<br>Required' : '' ) . '</th><td>' . nl2br( esc_html( $r['value'] ) ) . '<br><small>' . esc_html( $r['source'] ) . '</small></td><td>';
+			echo '<tr><th scope="row">' . esc_html( $d['label'] ) . '<br><code>{{' . esc_html( $key ) . '}}</code>' . ( $d['required'] ? '<br>Required' : '' ) . '</th><td>' . self::preview( $d['type'], (string) $r['value'] ) . '<br><small>' . esc_html( $r['source'] ) . '</small></td><td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- preview() escapes its output.
 			if ( $editable ) {
-				echo '<label><input type="checkbox" name="override[' . esc_attr( $key ) . ']" value="1" ' . checked( array_key_exists( $key, $p['values'] ?? array() ), true, false ) . '> Override inherited value</label><br><textarea rows="2" class="large-text" aria-label="' . esc_attr( $d['label'] ) . '" name="values[' . esc_attr( $key ) . ']">' . esc_textarea( $p['values'][ $key ] ?? '' ) . '</textarea>';
+				echo '<div class="brand-fleet-override" data-override="override[' . esc_attr( $key ) . ']"><label><input type="checkbox" name="override[' . esc_attr( $key ) . ']" value="1" ' . checked( array_key_exists( $key, $p['values'] ?? array() ), true, false ) . '> Override inherited value</label><br>';
+				self::input( $d['type'], 'values[' . $key . ']', (string) ( $p['values'][ $key ] ?? '' ), array( 'aria-label' => $d['label'] ) );
+				echo '</div>';
 			} else { echo 'Controlled by network'; }
 			echo '</td></tr>';
 		}
@@ -110,7 +159,7 @@ class Fleet_Admin {
 			$user = get_userdata( (int) $row['user'] );
 			$labels = array_map( static fn( $key ) => $defs[ $key ]['label'] ?? $key, $row['keys'] );
 			$is_bulk = 'bulk' === $row['action'];
-			$action = $is_bulk ? ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) : ( 'definition' === $row['action'] ? 'Variable definition saved' : ( 'import' === $row['action'] ? 'Definitions imported' : ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) ) );
+			$action = $is_bulk ? ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) : ( 'definition' === $row['action'] ? 'Variable definition saved' : ( 'import' === $row['action'] ? 'Definitions imported' : ( 'meta-keys' === $row['action'] ? 'Custom fields updated' : ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) ) ) );
 			echo '<tr><td>' . esc_html( gmdate( 'M j, Y H:i', strtotime( $row['time'] ) ) ) . '</td><td>' . esc_html( $user ? $user->display_name : 'Deleted user' ) . '</td><td>' . esc_html( $action ) . '</td><td>' . esc_html( $labels ? implode( ', ', $labels ) : 'Connections / enrollment' ) . '</td><td>';
 			if ( $is_bulk ) {
 				echo esc_html( sprintf( '%d sites: %d updated, %d skipped, %d pending', $row['total'], $row['updated'], $row['skipped'], max( 0, $row['total'] - $row['updated'] - $row['skipped'] ) ) );
@@ -148,13 +197,18 @@ class Fleet_Admin {
 			echo '<p>' . esc_html( (string) count( $filtered ) ) . ' variables</p><table class="widefat striped"><thead><tr><th scope="col">Variable</th><th scope="col">Type</th><th scope="col">Value policy</th><th scope="col">Site editing</th><th scope="col">Setup</th></tr></thead><tbody>';
 			foreach ( array_slice( $filtered, ( $page - 1 ) * 20, 20, true ) as $key => $def ) {
 				$access = array( 'all' => 'All sites', 'selected' => 'Selected sites', 'none' => 'Network admins only' );
-				echo '<tr><td><strong><a href="' . esc_url( self::url( array( 'tab' => 'definitions', 'key' => $key ) ) ) . '">' . esc_html( $def['label'] ) . '</a></strong><br><code>{{' . esc_html( $key ) . '}}</code></td><td>' . esc_html( ucfirst( $def['type'] ) ) . '</td><td>' . esc_html( 'network' === $def['scope'] ? 'Locked network value' : 'Site overrides allowed' ) . '</td><td>' . esc_html( 'network' === $def['scope'] ? 'Network admins only' : $access[ $def['access'] ] ) . '</td><td>' . esc_html( implode( ' · ', array_filter( array( $def['required'] ? 'Required' : '', $def['clone'] ? 'Prompt on Add Site' : '' ) ) ) ) . '</td></tr>';
+				echo '<tr><td><strong><a href="' . esc_url( self::url( array( 'tab' => 'definitions', 'key' => $key ) ) ) . '">' . esc_html( $def['label'] ) . '</a></strong><br><code>{{' . esc_html( $key ) . '}}</code></td><td>' . esc_html( Fleet::TYPES[ $def['type'] ] ?? ucfirst( $def['type'] ) ) . '</td><td>' . esc_html( 'network' === $def['scope'] ? 'Locked network value' : 'Site overrides allowed' ) . '</td><td>' . esc_html( 'network' === $def['scope'] ? 'Network admins only' : $access[ $def['access'] ] ) . '</td><td>' . esc_html( implode( ' · ', array_filter( array( $def['required'] ? 'Required' : '', $def['clone'] ? 'Prompt on Add Site' : '' ) ) ) ) . '</td></tr>';
 			}
 			if ( ! $filtered ) { echo '<tr><td colspan="5">No variables found. Try another search or add a new variable.</td></tr>'; }
 			echo '</tbody></table><p>';
 			if ( $page > 1 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'definitions', 'q' => $search, 'paged' => $page - 1 ) ) ) . '">Previous</a> '; }
 			if ( count( $filtered ) > $page * 20 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'definitions', 'q' => $search, 'paged' => $page + 1 ) ) ) . '">Next</a>'; }
-			echo '</p>'; return;
+			echo '</p>';
+			echo '<h2>Where variables work</h2><p>Variables work in page content, headers and footers, post titles, excerpts, and SEO titles and descriptions (Yoast and Rank Math). Links, images and colors also work inside block settings, such as an image source or a button link. In the block editor, a heading, paragraph, image or button can also be connected to a variable under <strong>Attributes</strong> in the block settings (gear) tab.</p>';
+			self::begin( 'meta-keys' );
+			echo '<p><label>Also use variables in these custom fields<br><textarea class="large-text code" rows="2" name="meta_keys" placeholder="for example: hero_subtitle, store_hours">' . esc_textarea( implode( ', ', Fleet::meta_keys() ) ) . '</textarea></label></p><p class="description">Enter custom field (post meta) keys, separated by commas. On the live site, {{tokens}} in these fields show each site\'s own value. Up to 50 fields.</p>';
+			submit_button( 'Save custom fields', 'secondary' ); echo '</form>';
+			return;
 		}
 		echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'definitions' ) ) ) . '">← All variables</a></p>';
 		if ( $edit && ! isset( $defs[ $edit ] ) ) { echo '<p>This variable was not found.</p>'; return; }
@@ -162,9 +216,13 @@ class Fleet_Admin {
 		echo '<div class="brand-fleet-definition-form"><h3>Name and format</h3>';
 		if ( $edit ) { echo '<p>Stable key: <code>' . esc_html( $edit ) . '</code></p><input type="hidden" name="key" value="' . esc_attr( $edit ) . '">'; } else { self::field( 'key', 'Stable key (for example opening_hours)' ); }
 		self::field( 'label', 'Label', $d['label'] ?? '' );
-		self::select( 'type', 'Value type (cannot change after creation)', array_combine( array( 'text', 'textarea', 'url', 'email', 'color', 'number' ), array( 'Text', 'Multiline text', 'URL', 'Email', 'Color', 'Number' ) ), $d['type'] ?? 'text' );
+		if ( $edit ) { echo '<p>Value type: <strong>' . esc_html( Fleet::TYPES[ $d['type'] ] ?? $d['type'] ) . '</strong> <span class="description">(fixed after creation)</span></p><input type="hidden" name="type" value="' . esc_attr( $d['type'] ) . '">'; }
+		else { self::select( 'type', 'Value type (cannot change after creation)', Fleet::TYPES, 'text' ); echo '<p class="description">Images can be a link or an upload to the Media Library. Colors get a color picker. Links, images and colors also work inside block settings such as an image source, button link or background color.</p>'; }
 		echo '<h3>Defaults and permissions</h3><p>Choose a shared default, then decide whether sites can provide their own value.</p>';
-		echo '<p><label>Network default<br><textarea class="large-text" rows="3" name="default">' . esc_textarea( $d['default'] ?? '' ) . '</textarea></label></p>';
+		self::enqueue_fields();
+		echo '<div class="brand-fleet-field"><span class="brand-fleet-field-label">Network default</span>';
+		self::typed_inputs( 'type', 'default', $d['type'] ?? 'text', (string) ( $d['default'] ?? '' ), array( 'aria-label' => 'Network default' ) );
+		echo '</div>';
 		self::select( 'scope', 'Value policy', array( 'network' => 'Locked to network value', 'location' => 'Allow site values and inheritance' ), $d['scope'] ?? 'location' );
 		self::select( 'access', 'Who may edit site overrides?', array( 'none' => 'Network administrators only', 'all' => 'All site administrators', 'selected' => 'Selected site administrators' ), $d['access'] ?? 'none' );
 		Site_Picker::render( 'sites', 'Sites allowed to edit (when Selected site administrators is chosen)', $d['sites'] ?? array(), true );
@@ -193,8 +251,14 @@ class Fleet_Admin {
 		echo '<h2>Prepare a bulk update</h2><p>Preview before applying. Changed sites are skipped instead of overwriting edits made after preview. Batches keep running in the background, so you can close this page and come back to check progress.</p>'; self::begin( 'bulk' );
 		Site_Picker::render( 'ids', 'Choose sites to update', array(), true ); Site_Picker::render( 'group_id', 'Or choose a brand hub to update all its enrolled sites', array(), false, 'Use selected sites above' );
 		echo '<p class="description">Choosing a hub replaces the individual site selection for this batch. Review the preview before applying.</p>';
-		self::select( 'variable', 'Variable', array_map( static fn( $d ) => $d['label'], array_filter( Fleet::definitions(), static fn( $d ) => 'location' === $d['scope'] ) ), '' );
-		echo '<p><label>New value<br><textarea name="value" rows="3" class="large-text"></textarea></label></p><p><label><input type="checkbox" name="inherit" value="1">Reset to inherited value</label></p>'; submit_button( 'Prepare preview' ); echo '</form>';
+		$variables = array_filter( Fleet::definitions(), static fn( $d ) => 'location' === $d['scope'] );
+		echo '<p><label>Variable<br><select name="variable">';
+		foreach ( $variables as $key => $d ) { echo '<option value="' . esc_attr( $key ) . '" data-type="' . esc_attr( $d['type'] ) . '">' . esc_html( $d['label'] . ' (' . ( Fleet::TYPES[ $d['type'] ] ?? $d['type'] ) . ')' ) . '</option>'; }
+		echo '</select></label></p>';
+		self::enqueue_fields();
+		echo '<div class="brand-fleet-field"><span class="brand-fleet-field-label">New value</span>';
+		self::typed_inputs( 'variable', 'value', (string) ( reset( $variables )['type'] ?? 'text' ), '', array( 'aria-label' => 'New value' ) );
+		echo '</div><p><label><input type="checkbox" name="inherit" value="1">Reset to inherited value</label></p>'; submit_button( 'Prepare preview' ); echo '</form>';
 		$j = Fleet_Jobs::get(); if ( ! $j ) { return; }
 		$batch = isset( $_GET['batch'] ) ? sanitize_text_field( wp_unslash( $_GET['batch'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only batch view.
 		if ( $batch !== $j['id'] ) {
@@ -241,6 +305,8 @@ class Fleet_Admin {
 				if ( 'definition' === $task ) {
 					if ( ( $in['schema_hash'] ?? '' ) !== Fleet::hash( Fleet::definitions() ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
 					$in['sites'] = is_array( $in['sites'] ?? null ) ? $in['sites'] : preg_split( '/[\s,]+/', $in['sites'] ?? '' ); Fleet::save_definition( (string) ( $in['key'] ?? '' ), $in, (string) ( $in['schema_hash'] ?? '' ) ); $url = self::url( array( 'tab' => 'definitions', 'saved' => 1 ) );
+				} elseif ( 'meta-keys' === $task ) {
+					Fleet::save_meta_keys( (string) ( $in['meta_keys'] ?? '' ) ); $url = self::url( array( 'tab' => 'definitions', 'saved' => 1 ) );
 				} elseif ( 'import-apply' === $task ) {
 					$document = Fleet_Transfer::decode( (string) ( $in['document'] ?? '' ) );
 					$written = Fleet_Transfer::apply_import( $document, (string) ( $in['expected'] ?? '' ) );

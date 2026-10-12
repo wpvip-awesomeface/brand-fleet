@@ -14,3 +14,36 @@
 @media (max-width: 600px) { .brand-fleet .brand-fleet-search-form { width: 100%; } .brand-fleet .brand-fleet-search-form label { flex: 1; min-width: 160px; } .brand-fleet .brand-fleet-definition-form { padding: 16px; } }
 
 .brand-fleet [hidden] { display: none !important; }
+
+.brand-fleet-field { margin: 1em 0; }
+.brand-fleet-field-label { display: block; margin-bottom: 4px; }
+.brand-fleet-image { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 640px; }
+.brand-fleet-image-preview, .brand-fleet-thumb { max-width: 160px; max-height: 120px; border: 1px solid #dcdcde; border-radius: 4px; background: #f6f7f7; object-fit: contain; }
+.brand-fleet-image-actions { display: flex; align-items: center; gap: 12px; }
+.brand-fleet-image-clear { color: #b32d2e; }
+.brand-fleet-swatch { display: inline-block; width: 18px; height: 18px; vertical-align: middle; border: 1px solid rgba(0,0,0,.2); border-radius: 3px; }
+.brand-fleet-override .wp-picker-container { margin-top: 4px; }
+
+.brand-fleet .nav-tab-wrapper { margin: 16px 0 8px; }
+.brand-fleet-intro { max-width: 760px; font-size: 14px; color: #3c434a; }
+.brand-fleet-note { padding: 10px 14px; background: #f0f6fc; border-left: 4px solid #2271b1; max-width: 760px; }
+.brand-fleet-values th[scope=row], .brand-fleet-values td { vertical-align: top; }
+.brand-fleet-values tbody tr:not(.brand-fleet-group) { border-top: 1px solid #f0f0f1; }
+.brand-fleet-group th { background: #f6f7f7; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 12px; color: #50575e; }
+.brand-fleet-copy { margin-left: 4px; font-size: 12px; }
+.brand-fleet-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #f0f0f1; color: #50575e; font-size: 12px; line-height: 18px; }
+.brand-fleet-tag.is-on { background: #edfaef; color: #00450c; }
+.brand-fleet-source { color: #646970; }
+.brand-fleet-choices { margin: 8px 0 16px; display: grid; gap: 10px; }
+.brand-fleet-choices legend { font-weight: 600; margin-bottom: 6px; }
+.brand-fleet-choices label { display: block; }
+.brand-fleet-panel { margin: 16px 0; padding: 8px 14px; background: #fff; border: 1px solid #dcdcde; border-radius: 4px; max-width: 800px; }
+.brand-fleet-panel summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.brand-fleet-status { font-weight: 600; }
+.brand-fleet-actions { display: flex; gap: 8px; }
+.brand-fleet-matches .check-column { width: 64px; padding-left: 12px; }
+.brand-fleet-matches .check-column input { margin: 0; }
+.brand-fleet-snippet del { background: #fcf0f1; color: #8a2424; }
+.brand-fleet-snippet ins { background: #edfaef; color: #00450c; text-decoration: none; margin-left: 2px; }
+.brand-fleet-embed-settings { margin-top: 12px; }
+.brand-fleet-definition-form input[name=key] { width: 18em; margin: 0 4px; }

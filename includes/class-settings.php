@@ -201,7 +201,9 @@ class Settings {
 		if ( Fleet::profile( get_current_blog_id() ) ) {
 			foreach ( Fleet::definitions() as $key => $definition ) {
 				$token = '{{' . $key . '}}';
-				if ( ! isset( $tokens[ $token ] ) ) { $tokens[ $token ] = Fleet::resolved( get_current_blog_id(), $key )['value']; }
+				// Embeds print through Fleet_Embeds only, never as content tokens.
+				if ( 'embed' === $definition['type'] ) { continue; }
+				if ( ! isset( $tokens[ $token ] ) ) { $tokens[ $token ] = Fleet::display( $definition, (string) Fleet::resolved( get_current_blog_id(), $key )['value'] ); }
 			}
 		}
 		return $tokens;

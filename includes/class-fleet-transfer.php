@@ -6,13 +6,13 @@ defined( 'ABSPATH' ) || exit;
 
 class Fleet_Transfer {
 	const FORMAT_VERSION = 1;
-	const DIFF_FIELDS = array( 'label', 'type', 'default', 'scope', 'access', 'required', 'clone' );
+	const DIFF_FIELDS = array( 'label', 'type', 'default', 'scope', 'access', 'required', 'clone', 'help', 'group', 'options', 'placement' );
 
 	/** Definitions only: no site data crosses networks, and site IDs from one network are meaningless on another. */
 	public static function export(): array {
 		$definitions = array();
 		foreach ( Fleet::definitions() as $key => $d ) {
-			unset( $d['sites'] );
+			unset( $d['sites'], $d['targets'] );
 			if ( 'selected' === $d['access'] ) { $d['access'] = 'none'; }
 			$definitions[ $key ] = $d;
 		}
@@ -76,7 +76,10 @@ class Fleet_Transfer {
 			}
 			$diff = array();
 			foreach ( self::DIFF_FIELDS as $field ) {
-				if ( $existing[ $field ] !== $d[ $field ] ) { $diff[ $field ] = array( 'before' => $existing[ $field ], 'after' => $d[ $field ] ); }
+				$before = $existing[ $field ] ?? ( Fleet::EXTRAS[ $field ] ?? null );
+				$after = $d[ $field ] ?? ( Fleet::EXTRAS[ $field ] ?? null );
+				if ( 'placement' === $field && 'embed' !== $d['type'] ) { continue; }
+				if ( $before !== $after ) { $diff[ $field ] = array( 'before' => $before, 'after' => $after ); }
 			}
 			if ( $diff ) {
 				$rows[ $key ] = array( 'status' => 'changed', 'label' => $d['label'], 'diff' => $diff );
@@ -105,6 +108,7 @@ class Fleet_Transfer {
 			foreach ( $accepted as $key => $d ) {
 				// Import never carries site delegation; keep whatever the target already had for this key.
 				$d['sites'] = $defs[ $key ]['sites'] ?? array();
+				if ( 'embed' === $d['type'] ) { $d['targets'] = $defs[ $key ]['targets'] ?? array(); }
 				$defs[ $key ] = $d;
 			}
 			update_network_option( get_current_network_id(), Fleet::SCHEMA, $defs );

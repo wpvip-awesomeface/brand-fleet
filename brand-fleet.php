@@ -3,7 +3,7 @@
  * Plugin Name: Brand Fleet
  * Plugin URI:  https://github.com/wpvip-awesomeface/brand-fleet
  * Description: Network-managed brand variables, delegated location overrides, bulk updates, Add Site setup, and dynamic brand blocks.
- * Version:     1.1.0
+ * Version:     1.3.0
  * Requires at least: 6.9
  * Requires PHP: 8.0
  * Network:      true
@@ -30,7 +30,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'BRAND_FLEET_VERSION', '1.1.0' );
+define( 'BRAND_FLEET_VERSION', '1.3.0' );
 define( 'BRAND_FLEET_DIR', plugin_dir_path( __FILE__ ) );
 define( 'BRAND_FLEET_URL', plugin_dir_url( __FILE__ ) );
 
@@ -46,6 +46,8 @@ require_once BRAND_FLEET_DIR . 'includes/class-fleet-admin.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-onboarding.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-clone.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-transfer.php';
+require_once BRAND_FLEET_DIR . 'includes/class-fleet-embeds.php';
+require_once BRAND_FLEET_DIR . 'includes/class-fleet-replace.php';
 require_once BRAND_FLEET_DIR . 'includes/class-fleet-abilities.php';
 require_once BRAND_FLEET_DIR . 'includes/class-plugin.php';
 

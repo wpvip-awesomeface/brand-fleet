@@ -3,7 +3,7 @@
 	'use strict';
 	const current = document.getElementById('brand-fleet-current-batch');
 	const changed = document.getElementById('brand-fleet-batch-changed');
-	const form = document.querySelector('input[name=task][value=bulk]')?.form;
+	const form = document.querySelector('input[name=task][value=bulk], input[name=task][value=replace]')?.form;
 	if (form && current && changed) {
 		const invalidate = event => {
 			if (event.target.matches('input[type=search]')) return;

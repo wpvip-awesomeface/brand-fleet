@@ -21,6 +21,10 @@ class Fleet_Jobs {
 
 	private static function key( int $user = 0 ): string { return 'brand_fleet_job_' . ( $user ? $user : get_current_user_id() ); }
 	private static function chunk_key( array $j, int $n ): string { return self::key( (int) $j['user'] ) . '_' . $n; }
+	private static function replacing( array $j ): bool { return 'replace' === ( $j['kind'] ?? '' ); }
+	/** Find and replace rows hold match lists and write posts, so they use smaller chunks and steps. */
+	private static function chunk( array $j ): int { return self::replacing( $j ) ? 25 : self::CHUNK; }
+	private static function step_size( array $j ): int { return self::replacing( $j ) ? 5 : self::STEP; }
 	public static function get( int $user = 0 ): array { return (array) get_network_option( get_current_network_id(), self::key( $user ), array() ); }
 	private static function store( array $j ): array { update_network_option( get_current_network_id(), self::key( (int) $j['user'] ), $j ); return $j; }
 
@@ -28,12 +32,34 @@ class Fleet_Jobs {
 	public static function rows( array $j, int $offset, int $count = 25 ): array {
 		if ( isset( $j['rows'] ) ) { return array_slice( (array) $j['rows'], $offset, $count ); }
 		$out = array();
-		for ( $n = intdiv( $offset, self::CHUNK ); count( $out ) < $count && $n * self::CHUNK < count( $j['ids'] ?? array() ); ++$n ) {
+		for ( $n = intdiv( $offset, self::chunk( $j ) ); count( $out ) < $count && $n * self::chunk( $j ) < count( $j['ids'] ?? array() ); ++$n ) {
 			foreach ( (array) get_network_option( get_current_network_id(), self::chunk_key( $j, $n ), array() ) as $i => $row ) {
 				if ( $i >= $offset && count( $out ) < $count ) { $out[] = $row; }
 			}
 		}
 		return $out;
+	}
+	/** One page of rows for sites that had find and replace matches, with each row's index. */
+	public static function hit_rows( array $j, int $offset, int $count = 25 ): array {
+		$out = array(); $chunks = array();
+		foreach ( array_slice( (array) ( $j['hits'] ?? array() ), $offset, $count ) as $i ) {
+			$n = intdiv( (int) $i, self::chunk( $j ) );
+			$chunks[ $n ] = $chunks[ $n ] ?? (array) get_network_option( get_current_network_id(), self::chunk_key( $j, $n ), array() );
+			if ( isset( $chunks[ $n ][ $i ] ) ) { $out[ (int) $i ] = $chunks[ $n ][ $i ]; }
+		}
+		return $out;
+	}
+	/** Leave one matching post out of (or back in) a reviewed find and replace batch. */
+	public static function exclude( string $id, int $row, int $post, bool $excluded ): array {
+		return Fleet::locked( 'job_' . get_current_user_id(), static function () use ( $id, $row, $post, $excluded ) {
+			if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
+			$j = self::get();
+			if ( ( $j['id'] ?? '' ) !== $id || ! self::replacing( $j ) || 'ready' !== $j['phase'] ) { throw new \RuntimeException( 'This preview can no longer be changed. Refresh the page.' ); }
+			$key = $row . ':' . $post;
+			if ( $excluded ) { $j['left_out'][ $key ] = true; } else { unset( $j['left_out'][ $key ] ); }
+			if ( count( $j['left_out'] ?? array() ) > 5000 ) { throw new \InvalidArgumentException( 'Leave out up to 5,000 pages, or narrow the search.' ); }
+			return self::store( $j );
+		}, 20 );
 	}
 	public static function counts( array $j ): array {
 		return array_filter( $j['counts'] ?? array_count_values( array_column( (array) ( $j['rows'] ?? array() ), 'status' ) ) );
@@ -41,7 +67,7 @@ class Fleet_Jobs {
 	/** Compact response for UI and MCP: no site-ID list, one page of rows. */
 	public static function view( array $j, int $offset = 0 ): array {
 		if ( ! $j ) { return array(); }
-		return array( 'id' => $j['id'], 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
+		return array( 'id' => $j['id'], 'kind' => $j['kind'] ?? 'bulk', 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'replace' => $j['replace'] ?? null, 'sites_with_matches' => count( $j['hits'] ?? array() ), 'excluded' => array_keys( $j['left_out'] ?? array() ), 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
 	}
 
 	public static function start( array $ids, array $patch ): array {
@@ -49,10 +75,18 @@ class Fleet_Jobs {
 		self::activate( $j );
 		return $j;
 	}
-	private static function create( array $ids, array $patch ): array {
+	/** Find and replace batch: $spec comes from Fleet_Replace::spec(). */
+	public static function start_replace( array $ids, array $spec ): array {
+		$spec = Fleet_Replace::spec( $spec );
+		$j = Fleet::locked( 'job_' . get_current_user_id(), static fn() => self::create( $ids, array(), $spec ) );
+		self::activate( $j );
+		return $j;
+	}
+	private static function create( array $ids, array $patch, ?array $replace = null ): array {
 		if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
 		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
-		if ( ! $ids || count( $ids ) > 10000 || ! $patch ) { throw new \InvalidArgumentException( 'Choose 1–10,000 sites and at least one variable.' ); }
+		if ( ! $ids || count( $ids ) > 10000 ) { throw new \InvalidArgumentException( 'Choose 1–10,000 sites.' ); }
+		if ( ! $patch && ! $replace ) { throw new \InvalidArgumentException( 'Choose at least one variable.' ); }
 		// Reject a bad value once, instead of once per site.
 		$defs = Fleet::definitions();
 		foreach ( $patch as $key => $value ) {
@@ -62,9 +96,11 @@ class Fleet_Jobs {
 		$old = self::get();
 		if ( 'apply' === ( $old['phase'] ?? '' ) ) { throw new \RuntimeException( sprintf( 'Your previous batch is still applying (%d of %d sites). Wait for it to finish or cancel it first.', (int) $old['cursor'], count( $old['ids'] ) ) ); }
 		if ( $old && ! isset( $old['rows'] ) ) {
-			for ( $n = 0; $n * self::CHUNK < count( $old['ids'] ?? array() ); ++$n ) { delete_network_option( get_current_network_id(), self::chunk_key( $old, $n ) ); }
+			for ( $n = 0; $n * self::chunk( $old ) < count( $old['ids'] ?? array() ); ++$n ) { delete_network_option( get_current_network_id(), self::chunk_key( $old, $n ) ); }
 		}
-		return self::store( array( 'v' => 2, 'id' => wp_generate_uuid4(), 'user' => get_current_user_id(), 'phase' => 'preview', 'ids' => $ids, 'patch' => $patch, 'cursor' => 0, 'counts' => array(), 'sample' => array(), 'schema' => Fleet::hash( Fleet::definitions() ) ) );
+		$j = array( 'v' => 2, 'id' => wp_generate_uuid4(), 'user' => get_current_user_id(), 'phase' => 'preview', 'ids' => $ids, 'patch' => $patch, 'cursor' => 0, 'counts' => array(), 'sample' => array(), 'schema' => Fleet::hash( Fleet::definitions() ) );
+		if ( $replace ) { $j += array( 'kind' => 'replace', 'replace' => $replace, 'hits' => array(), 'left_out' => array() ); }
+		return self::store( $j );
 	}
 
 	/** Manual step of up to 25 sites. Returns current state when the background runner holds the batch or the cursor moved on. */
@@ -75,7 +111,7 @@ class Fleet_Jobs {
 				$j = self::get();
 				if ( ( $j['id'] ?? '' ) !== $id ) { throw new \RuntimeException( 'Stale batch request; refresh the batch.' ); }
 				if ( (int) $j['cursor'] !== $cursor && ! ( $confirm && 'ready' === $j['phase'] ) ) { return $j; }
-				return self::advance( $j, $confirm, self::STEP, 20 );
+				return self::advance( $j, $confirm, self::step_size( $j ), 20 );
 			} );
 		} catch ( \RuntimeException $e ) {
 			if ( Fleet::BUSY !== $e->getCode() ) { throw $e; }
@@ -107,9 +143,15 @@ class Fleet_Jobs {
 		}
 		$total = count( $j['ids'] ); $done = 0; $start = microtime( true );
 		while ( $j['cursor'] < $total && $done < $limit && microtime( true ) - $start < $seconds ) {
-			$n = intdiv( $j['cursor'], self::CHUNK );
+			// Applying a find and replace only revisits sites that had matches.
+			if ( self::replacing( $j ) && 'apply' === $j['phase'] ) {
+				$next = $total;
+				foreach ( $j['hits'] as $hit ) { if ( $hit >= $j['cursor'] ) { $next = min( $next, (int) $hit ); } }
+				if ( $next > $j['cursor'] ) { $j['cursor'] = $next; self::store( $j ); if ( $next >= $total ) { break; } }
+			}
+			$n = intdiv( $j['cursor'], self::chunk( $j ) );
 			$chunk = (array) get_network_option( get_current_network_id(), self::chunk_key( $j, $n ), array() );
-			$end = min( $total, $j['cursor'] + self::STEP ); $updated = array();
+			$end = min( $total, $j['cursor'] + self::step_size( $j ) ); $updated = array();
 			for ( $i = $j['cursor']; $i < $end; ++$i ) {
 				$was = $chunk[ $i ]['status'] ?? '';
 				$chunk[ $i ] = self::row( $j, $i, $chunk[ $i ] ?? array() );
@@ -118,7 +160,8 @@ class Fleet_Jobs {
 					if ( $was ) { $j['counts'][ $was ] = max( 0, ( $j['counts'][ $was ] ?? 0 ) - 1 ); }
 					$j['counts'][ $now ] = ( $j['counts'][ $now ] ?? 0 ) + 1;
 				}
-				if ( 'updated' === $now && 'ready' === $was ) { $updated[] = (int) $chunk[ $i ]['site']; }
+				if ( 'updated' === $now && 'ready' === $was && ! self::replacing( $j ) ) { $updated[] = (int) $chunk[ $i ]['site']; }
+				if ( 'preview' === $j['phase'] && ! empty( $chunk[ $i ]['matches'] ) && end( $j['hits'] ) !== $i ) { $j['hits'][] = $i; $j['matched'] = ( $j['matched'] ?? 0 ) + count( $chunk[ $i ]['matches'] ); }
 				if ( 'apply' === $j['phase'] && count( $j['sample'] ) < 20 && in_array( $now, array( 'updated', 'skipped' ), true ) ) { $j['sample'][] = array_intersect_key( $chunk[ $i ], array_flip( array( 'site', 'status', 'error' ) ) ); }
 			}
 			// Rows first, then the cursor: a crash between the two only repeats work that is safe to repeat.
@@ -134,6 +177,7 @@ class Fleet_Jobs {
 
 	private static function row( array $j, int $i, array $row ): array {
 		$site = (int) $j['ids'][ $i ];
+		if ( self::replacing( $j ) ) { return self::replace_row( $j, $i, $row ); }
 		try {
 			if ( 'preview' === $j['phase'] ) {
 				$before = Fleet::profile( $site );
@@ -150,6 +194,32 @@ class Fleet_Jobs {
 			return array( 'status' => 'updated' ) + $row;
 		} catch ( \Throwable $e ) {
 			return array( 'site' => $site, 'status' => 'skipped', 'error' => $e->getMessage() );
+		}
+	}
+	/** Preview lists matching posts on one site; apply rewrites the ones still included and unchanged. */
+	private static function replace_row( array $j, int $i, array $row ): array {
+		$site = (int) $j['ids'][ $i ];
+		if ( 'preview' !== $j['phase'] && 'ready' !== ( $row['status'] ?? '' ) ) { return $row; }
+		if ( ! Fleet::site( $site ) ) { return array( 'site' => $site, 'status' => 'skipped', 'error' => 'Site is no longer active.' ); }
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Network-admin batch reads or writes one site's posts; always restored.
+		switch_to_blog( $site );
+		try {
+			if ( 'preview' === $j['phase'] ) {
+				$found = Fleet_Replace::find( $j['replace'] );
+				return array( 'site' => $site, 'status' => $found['matches'] ? 'ready' : 'no matches', 'matches' => $found['matches'], 'more' => $found['more'] );
+			}
+			$replaced = 0;
+			foreach ( $row['matches'] as $k => $m ) {
+				$result = isset( $j['left_out'][ $i . ':' . $m['post'] ] ) ? 'left out' : Fleet_Replace::replace_post( (int) $m['post'], $j['replace'], (string) $m['hash'] );
+				$row['matches'][ $k ]['result'] = $result;
+				if ( 'replaced' === $result ) { ++$replaced; }
+			}
+			Fleet_Cache::flush();
+			return array( 'status' => $replaced ? 'updated' : 'skipped', 'replaced' => $replaced ) + $row;
+		} catch ( \Throwable $e ) {
+			return array( 'site' => $site, 'status' => 'skipped', 'error' => $e->getMessage() ) + $row;
+		} finally {
+			restore_current_blog();
 		}
 	}
 	private static function same( array $a, array $b ): bool { ksort( $a ); ksort( $b ); return $a === $b; }

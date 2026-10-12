@@ -89,7 +89,7 @@ class Fleet_Cache {
 		return array( 'add' => array(), 'more' => count( $posts ) === self::PAGE, 'posts' => count( $posts ) );
 	}
 	/** Send queued purges now instead of at shutdown, where anything past VIP's per-request cap is discarded. */
-	private static function flush(): void {
+	public static function flush(): void {
 		if ( class_exists( 'WPCOM_VIP_Cache_Manager' ) && method_exists( 'WPCOM_VIP_Cache_Manager', 'execute_purges' ) ) { \WPCOM_VIP_Cache_Manager::instance()->execute_purges(); }
 	}
 	/** Record progress unless the item was re-queued meanwhile; a re-queued site starts over. */

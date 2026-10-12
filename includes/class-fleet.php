@@ -12,7 +12,11 @@ class Fleet {
 	/** Exception code for a held lock: callers may wait and retry. */
 	const BUSY = 409;
 	/** Value types and their admin labels. A definition's type never changes after creation. */
-	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number' );
+	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number', 'select' => 'Dropdown', 'toggle' => 'Yes / No', 'date' => 'Date', 'embed' => 'Embed code' );
+	/** Optional definition settings; older definitions may not carry them. */
+	const EXTRAS = array( 'help' => '', 'group' => '', 'options' => array(), 'placement' => 'head', 'targets' => array() );
+	/** Where an embed prints. */
+	const PLACEMENTS = array( 'head' => 'In the page head', 'body' => 'At the start of the page body', 'footer' => 'At the end of the page' );
 	/** Network option: custom field keys whose front-end values swap {{tokens}}. */
 	const META_KEYS = 'brand_fleet_meta_keys';
 	/** Bulk writes are audited and purged once per checkpoint by Fleet_Jobs, not once per site. */
@@ -67,6 +71,20 @@ class Fleet {
 			case 'number':
 				if ( '' !== $value && ! preg_match( '/^-?\d+(\.\d+)?$/D', $value ) ) { throw new \InvalidArgumentException( 'Enter a decimal number.' ); }
 				return $value;
+			case 'select':
+				if ( '' !== $value && ! in_array( $value, (array) ( $definition['options'] ?? array() ), true ) ) { throw new \InvalidArgumentException( 'Choose one of the listed options.' ); }
+				return $value;
+			case 'toggle':
+				if ( ! in_array( $value, array( '', '0', '1' ), true ) ) { throw new \InvalidArgumentException( 'Choose yes or no.' ); }
+				return $value;
+			case 'date':
+				if ( '' === $value ) { return ''; }
+				$date = \DateTimeImmutable::createFromFormat( '!Y-m-d', $value );
+				if ( ! $date || $date->format( 'Y-m-d' ) !== $value ) { throw new \InvalidArgumentException( 'Enter a date as YYYY-MM-DD.' ); }
+				return $value;
+			case 'embed':
+				// Raw markup by design: only network admins who may post unfiltered HTML can save it (see validate_definition()).
+				return $value;
 			case 'textarea': return sanitize_textarea_field( $value );
 			default: return sanitize_text_field( $value );
 		}
@@ -93,11 +111,40 @@ class Fleet {
 		if ( ! isset( self::TYPES[ $type ] ) ) { throw new \InvalidArgumentException( 'Unsupported variable type.' ); }
 		if ( isset( $defs[ $key ] ) && $defs[ $key ]['type'] !== $type ) { throw new \InvalidArgumentException( 'Existing types are immutable; create a new key for a different type.' ); }
 		if ( ! in_array( $input['scope'] ?? 'location', array( 'network', 'location' ), true ) || ! in_array( $input['access'] ?? 'none', array( 'all', 'selected', 'none' ), true ) ) { throw new \InvalidArgumentException( 'Choose a valid scope and delegation policy.' ); }
-		$d = array( 'label' => sanitize_text_field( $input['label'] ?? $key ), 'type' => $type, 'scope' => ( $input['scope'] ?? '' ) === 'network' ? 'network' : 'location', 'access' => in_array( $input['access'] ?? '', array( 'all', 'selected', 'none' ), true ) ? $input['access'] : 'none', 'sites' => array_values( array_unique( array_filter( array_map( 'absint', (array) ( $input['sites'] ?? array() ) ) ) ) ), 'required' => ! empty( $input['required'] ), 'clone' => ! empty( $input['clone'] ) );
-		foreach ( $d['sites'] as $id ) { if ( ! self::site( $id ) ) { throw new \InvalidArgumentException( 'Selected locations must belong to this network.' ); } }
+		$d = array( 'label' => sanitize_text_field( $input['label'] ?? $key ), 'type' => $type, 'scope' => ( $input['scope'] ?? '' ) === 'network' ? 'network' : 'location', 'access' => in_array( $input['access'] ?? '', array( 'all', 'selected', 'none' ), true ) ? $input['access'] : 'none', 'sites' => self::site_ids( $input['sites'] ?? array() ), 'required' => ! empty( $input['required'] ), 'clone' => ! empty( $input['clone'] ) );
+		$d['help'] = mb_substr( sanitize_text_field( (string) ( $input['help'] ?? '' ) ), 0, 200 );
+		$d['group'] = mb_substr( sanitize_text_field( (string) ( $input['group'] ?? '' ) ), 0, 40 );
+		$d['options'] = self::options( $type, $input['options'] ?? array() );
+		if ( 'embed' === $type ) {
+			// Embeds print raw markup on every targeted site, so they are always network-locked and need unfiltered_html.
+			if ( ! current_user_can( 'unfiltered_html' ) ) { throw new \InvalidArgumentException( 'Embed code needs permission to add unfiltered HTML.' ); }
+			$d = array_merge( $d, array( 'scope' => 'network', 'access' => 'none', 'sites' => array(), 'required' => false, 'clone' => false ) );
+			$d['placement'] = isset( self::PLACEMENTS[ $input['placement'] ?? '' ] ) ? $input['placement'] : 'head';
+			$d['targets'] = self::site_ids( $input['targets'] ?? array() );
+		}
+		foreach ( array_merge( $d['sites'], $d['targets'] ?? array() ) as $id ) { if ( ! self::site( $id ) ) { throw new \InvalidArgumentException( 'Selected locations must belong to this network.' ); } }
 		$d['default'] = self::clean( $input['default'] ?? '', $d );
 		if ( 'network' === $d['scope'] && $d['required'] && '' === $d['default'] ) { throw new \InvalidArgumentException( 'Required network variables need a default.' ); }
 		return $d;
+	}
+
+	private static function site_ids( $ids ): array {
+		return array_values( array_unique( array_filter( array_map( 'absint', is_array( $ids ) ? $ids : preg_split( '/[\s,]+/', (string) $ids ) ) ) ) );
+	}
+	/** Dropdown choices (one per line), or the yes / no labels for a toggle. */
+	private static function options( string $type, $input ): array {
+		if ( ! in_array( $type, array( 'select', 'toggle' ), true ) ) { return array(); }
+		$lines = is_array( $input ) ? $input : preg_split( '/\R/', (string) $input );
+		$options = array_values( array_unique( array_filter( array_map( static fn( $o ) => mb_substr( sanitize_text_field( (string) $o ), 0, 100 ), $lines ), 'strlen' ) ) );
+		if ( 'toggle' === $type ) { return array( $options[0] ?? 'Yes', $options[1] ?? 'No' ); }
+		if ( ! $options || count( $options ) > 50 ) { throw new \InvalidArgumentException( 'List 1 to 50 dropdown options, one per line.' ); }
+		return $options;
+	}
+	/** What a token shows: the stored value, formatted for toggles and dates. */
+	public static function display( array $d, string $value ): string {
+		if ( 'toggle' === $d['type'] && '' !== $value ) { $labels = self::options( 'toggle', $d['options'] ?? array() ); return '1' === $value ? $labels[0] : $labels[1]; }
+		if ( 'date' === $d['type'] && '' !== $value ) { $time = strtotime( $value . ' 12:00:00 UTC' ); return $time ? wp_date( (string) get_option( 'date_format' ), $time ) : $value; }
+		return $value;
 	}
 
 	public static function meta_keys(): array {
@@ -267,7 +314,7 @@ class Fleet {
 	public static function audit_job( array $job ): void {
 		$counts = Fleet_Jobs::counts( $job );
 		$details = $job['sample'] ?? array();
-		self::record_activity( array( 'batch' => $job['id'], 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => 'bulk', 'keys' => array_keys( $job['patch'] ), 'total' => count( $job['ids'] ), 'updated' => $counts['updated'] ?? 0, 'skipped' => $counts['skipped'] ?? 0, 'phase' => $job['phase'], 'details' => $details ) );
+		self::record_activity( array( 'batch' => $job['id'], 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => 'bulk', 'keys' => array_keys( $job['patch'] ), 'total' => count( $job['ids'] ), 'updated' => $counts['updated'] ?? 0, 'skipped' => $counts['skipped'] ?? 0, 'phase' => $job['phase'], 'details' => $details ) + ( isset( $job['replace'] ) ? array( 'replace' => array_intersect_key( $job['replace'], array( 'find' => 1, 'with' => 1 ) ) ) : array() ) );
 	}
 	private static function record_activity( array $entry ): void {
 		self::locked( 'audit', static function () use ( $entry ) {

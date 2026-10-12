@@ -43,7 +43,7 @@ class Fleet_Replace {
 
 	/** Replace in visible text; with markup on, also inside tags, links and block settings. */
 	public static function swap( string $html, array $spec, ?int &$count ): string {
-		$pattern = self::pattern( $spec ); $text = esc_html( $spec['with'] ); $count = 0;
+		$pattern = self::pattern( $spec ); $text = esc_html( $spec['with'] ); $count = 0; $n = 0;
 		if ( $spec['markup'] ) {
 			$parts = wp_html_split( $html );
 			foreach ( $parts as $i => $part ) { $parts[ $i ] = self::literal( $pattern, 0 === $i % 2 ? $text : $spec['with'], $part, $n ); $count += $n; }
@@ -79,7 +79,7 @@ class Fleet_Replace {
 		foreach ( array_map( 'intval', (array) $ids ) as $id ) {
 			$post = get_post( $id );
 			if ( ! $post ) { continue; }
-			$count = 0;
+			$count = 0; $n = 0;
 			foreach ( array( 'post_title', 'post_content', 'post_excerpt' ) as $field ) { self::swap( (string) $post->$field, $spec, $n ); $count += $n; }
 			if ( ! $count ) { continue; }
 			if ( count( $matches ) >= self::MAX_MATCHES ) { $more = true; break; }
@@ -105,7 +105,7 @@ class Fleet_Replace {
 		$post = get_post( $id );
 		if ( ! $post ) { return 'deleted'; }
 		if ( ! hash_equals( $hash, self::fingerprint( $post ) ) ) { return 'changed since preview'; }
-		$update = array( 'ID' => $id ); $total = 0;
+		$update = array( 'ID' => $id ); $total = 0; $n = 0;
 		foreach ( array( 'post_title', 'post_content', 'post_excerpt' ) as $field ) {
 			$new = self::swap( (string) $post->$field, $spec, $n );
 			if ( $n ) { $update[ $field ] = $new; $total += $n; }

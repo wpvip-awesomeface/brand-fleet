@@ -99,7 +99,14 @@ class Fleet_Cache {
 		try {
 			if ( 'consumer' === $work['type'] ) { return self::consumer_posts( $work ); }
 			// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts -- suppress_filters=false explicitly enables VIP query caching.
-			$posts = get_posts( array( 'post_type' => array_values( get_post_types( array( 'public' => true ) ) ), 'suppress_filters' => false, 'post_status' => 'publish', 'numberposts' => self::PAGE, 'offset' => $work['offset'], 'orderby' => 'ID', 'order' => 'ASC', 'fields' => 'ids' ) );
+			/**
+			 * Filters which post types are edge-purged when a site's brand values change.
+			 *
+			 * @param string[] $types Public post types on the site being purged.
+			 * @param int      $site  Blog ID.
+			 */
+			$types = (array) apply_filters( 'brand_fleet_purge_post_types', array_values( get_post_types( array( 'public' => true ) ) ), (int) $work['id'] );
+			$posts = get_posts( array( 'post_type' => $types, 'suppress_filters' => false, 'post_status' => 'publish', 'numberposts' => self::PAGE, 'offset' => $work['offset'], 'orderby' => 'ID', 'order' => 'ASC', 'fields' => 'ids' ) );
 			foreach ( $posts as $k => $id ) {
 				wpvip_purge_edge_cache_for_post( $id );
 				if ( 0 === ( $k + 1 ) % self::FLUSH_EVERY ) { self::flush(); }

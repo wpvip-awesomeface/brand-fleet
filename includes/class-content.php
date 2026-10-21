@@ -196,7 +196,7 @@ class Content {
 		}
 		restore_current_blog();
 
-		wp_cache_set( $cache_key, $raw, self::CACHE_GROUP, self::CACHE_TTL );
+		wp_cache_set( $cache_key, $raw, self::CACHE_GROUP, self::CACHE_TTL ); // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined -- CACHE_TTL is 300 seconds.
 		return $raw;
 	}
 
@@ -243,7 +243,15 @@ class Content {
 		++self::$depth;
 		$html = apply_filters( 'the_content', $raw );
 		--self::$depth;
-		return $html;
+		/**
+		 * Filters shared content pulled from the master site, after token swap and the_content.
+		 * Output must vary only by site, never by visitor, so pages stay edge-cacheable.
+		 *
+		 * @param string $html Rendered HTML.
+		 * @param string $slug Requested slug (before regional fallback).
+		 * @param string $kind 'page' or 'wp_block' (synced pattern).
+		 */
+		return (string) apply_filters( 'brand_fleet_shared_content', $html, $slug, $kind );
 	}
 
 	/** A master page or pattern changed: drop the shared copy and purge the locations that show it. */

@@ -136,6 +136,7 @@ class Fleet {
 		if ( '' !== $expected && ! hash_equals( $expected, self::hash( self::definitions() ) ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
 		if ( ! self::can( 'manage' ) ) { throw new \RuntimeException( 'Fleet manager permission required.' ); }
 		$defs = self::definitions();
+		$previous = $defs[ $key ] ?? array();
 		$d = self::validate_definition( $defs, $key, $input );
 		$defs[ $key ] = $d;
 		update_network_option( get_current_network_id(), self::SCHEMA, $defs );
@@ -143,6 +144,14 @@ class Fleet {
 		Fleet_Segments::reindex_all();
 		self::audit( 'definition', 0, array( $key ) );
 		Fleet_Cache::schedule();
+		/**
+		 * Fires after a variable definition is saved.
+		 *
+		 * @param string $key        Variable key.
+		 * @param array  $definition The saved, validated definition.
+		 * @param array  $previous   The definition before this save (empty when new).
+		 */
+		do_action( 'brand_fleet_definition_saved', $key, $d, $previous );
 	}
 	/** Pure field-validation rules, shared by the single-definition save path and definition import. */
 	public static function validate_definition( array $defs, string $key, array $input ): array {
@@ -342,6 +351,16 @@ class Fleet {
 		Fleet_Overrides::index_site( $site, $p, $old );
 		self::audit( 'site', $site, array_keys( $patch ) );
 		if ( ! self::$bulk ) { Fleet_Cache::schedule( $site ); }
+		/**
+		 * Fires after one site's Brand Fleet profile is written (edit, bulk, import, undo, request).
+		 * An empty $old means the site was just enrolled.
+		 *
+		 * @param int    $site Blog ID.
+		 * @param array  $new  Saved profile: values, connections, revision.
+		 * @param array  $old  Profile before this write.
+		 * @param string $via  What made the change: edit, bulk, import, undo, request or restore.
+		 */
+		do_action( 'brand_fleet_profile_saved', $site, $p, $old, self::current_via() );
 		return $p;
 	}
 

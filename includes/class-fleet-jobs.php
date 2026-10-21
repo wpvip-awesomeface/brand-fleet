@@ -24,8 +24,10 @@ class Fleet_Jobs {
 	private static function replacing( array $j ): bool { return 'replace' === ( $j['kind'] ?? '' ); }
 	private static function kind( array $j ): string { return (string) ( $j['kind'] ?? 'bulk' ); }
 	/** Find and replace and token-check rows hold match lists (and replace writes posts), so they use smaller chunks and steps; import rows carry per-site values. */
-	private static function chunk( array $j ): int { return array( 'replace' => 25, 'report' => 25, 'import' => 100 )[ self::kind( $j ) ] ?? self::CHUNK; }
-	private static function step_size( array $j ): int { return array( 'replace' => 5, 'report' => 10 )[ self::kind( $j ) ] ?? self::STEP; }
+	private static function chunk( array $j ): int { return array( 'replace' => 25, 'report' => 25, 'revert' => 25, 'import' => 100, 'undo' => 100 )[ self::kind( $j ) ] ?? self::CHUNK; }
+	private static function step_size( array $j ): int { return array( 'replace' => 5, 'report' => 10, 'revert' => 5 )[ self::kind( $j ) ] ?? self::STEP; }
+	/** Kinds whose rows each carry their own values (imports and undos of values). */
+	private static function per_site( array $j ): bool { return in_array( self::kind( $j ), array( 'import', 'undo' ), true ); }
 	public static function get( int $user = 0 ): array { return (array) get_network_option( get_current_network_id(), self::key( $user ), array() ); }
 	private static function store( array $j ): array { update_network_option( get_current_network_id(), self::key( (int) $j['user'] ), $j ); return $j; }
 
@@ -68,7 +70,7 @@ class Fleet_Jobs {
 	/** Compact response for UI and MCP: no site-ID list, one page of rows. */
 	public static function view( array $j, int $offset = 0 ): array {
 		if ( ! $j ) { return array(); }
-		return array( 'id' => $j['id'], 'kind' => $j['kind'] ?? 'bulk', 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'replace' => $j['replace'] ?? null, 'report' => $j['report'] ?? null, 'auto_apply' => ! empty( $j['auto'] ), 'sites_with_matches' => count( $j['hits'] ?? array() ), 'more_sites' => array_values( $j['more'] ?? array() ), 'excluded' => array_keys( $j['left_out'] ?? array() ), 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
+		return array( 'id' => $j['id'], 'kind' => $j['kind'] ?? 'bulk', 'undo_of' => $j['undo'] ?? null, 'can_undo' => in_array( $j['phase'], array( 'complete', 'cancelled', 'stopped' ), true ) && Fleet_Undo::available( $j['id'] ), 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'replace' => $j['replace'] ?? null, 'report' => $j['report'] ?? null, 'auto_apply' => ! empty( $j['auto'] ), 'sites_with_matches' => count( $j['hits'] ?? array() ), 'more_sites' => array_values( $j['more'] ?? array() ), 'excluded' => array_keys( $j['left_out'] ?? array() ), 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
 	}
 
 	public static function start( array $ids, array $patch ): array {
@@ -96,7 +98,20 @@ class Fleet_Jobs {
 		self::activate( $j );
 		return $j;
 	}
-	private static function create( array $ids, array $patch, ?array $replace = null, array $extra = array(), array $plan = array() ): array {
+	/** Undo: a reviewed batch putting back what an earlier batch changed. $plan is site_id => old values; $expect holds the values that batch wrote. */
+	public static function start_undo( array $ids, array $plan, array $expect, array $source ): array {
+		$extra = array( 'kind' => $source['kind'], 'undo' => array( 'batch' => $source['batch'], 'label' => $source['label'] ) );
+		$j = Fleet::locked( 'job_' . get_current_user_id(), static fn() => self::create( $ids, array(), null, $extra, $plan, $expect ) );
+		self::activate( $j );
+		return $j;
+	}
+	/** Every stored result row of a batch, in order. */
+	public static function all_rows( array $j ): array {
+		$out = array();
+		for ( $n = 0; $n * self::chunk( $j ) < count( $j['ids'] ?? array() ); ++$n ) { $out += (array) get_network_option( get_current_network_id(), self::chunk_key( $j, $n ), array() ); }
+		return $out;
+	}
+	private static function create( array $ids, array $patch, ?array $replace = null, array $extra = array(), array $plan = array(), array $expect = array() ): array {
 		if ( ! Fleet::can( 'bulk' ) ) { throw new \RuntimeException( 'Bulk update permission required.' ); }
 		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
 		if ( ! $ids || count( $ids ) > 10000 ) { throw new \InvalidArgumentException( 'Choose 1–10,000 sites.' ); }
@@ -120,7 +135,7 @@ class Fleet_Jobs {
 			$keys = array();
 			foreach ( array_chunk( $ids, self::chunk( $j ) ) as $n => $chunk_ids ) {
 				$rows = array();
-				foreach ( $chunk_ids as $k => $site ) { $rows[ $n * self::chunk( $j ) + $k ] = array( 'site' => $site, 'patch' => $plan[ $site ] ); $keys += array_flip( array_keys( $plan[ $site ] ) ); }
+				foreach ( $chunk_ids as $k => $site ) { $rows[ $n * self::chunk( $j ) + $k ] = array( 'site' => $site, 'patch' => $plan[ $site ] ) + ( isset( $expect[ $site ] ) ? array( 'expect' => $expect[ $site ] ) : array() ); $keys += array_flip( array_keys( $plan[ $site ] ) ); }
 				update_network_option( get_current_network_id(), self::chunk_key( $j, $n ), $rows );
 			}
 			$j['patch'] = array_fill_keys( array_keys( $keys ), true );
@@ -213,15 +228,18 @@ class Fleet_Jobs {
 		$site = (int) $j['ids'][ $i ];
 		if ( self::replacing( $j ) ) { return self::replace_row( $j, $i, $row ); }
 		if ( 'report' === self::kind( $j ) ) { return Fleet_Report::row( $site, $j['report'] ); }
-		$import = 'import' === self::kind( $j );
+		if ( 'revert' === self::kind( $j ) ) { return Fleet_Undo::revert_row( $j, array( 'site' => $site ) + $row ); }
+		$import = self::per_site( $j ); $undo = 'undo' === self::kind( $j );
 		$patch = $import ? (array) ( $row['patch'] ?? array() ) : $j['patch'];
-		$write = static fn( callable $callback ) => $import ? Fleet::import_write( $callback ) : $callback();
+		// Undo writes the old values back as they were, including imported ones, and history says why.
+		$write = static fn( callable $callback ) => $import ? Fleet::via( $undo ? 'undo' : 'import', static fn() => Fleet::import_write( $callback ) ) : $callback();
 		try {
 			if ( 'preview' === $j['phase'] ) {
+				if ( $undo && isset( $row['expect'] ) && Fleet_Undo::changed_since( $site, (array) $row['expect'] ) ) { return array( 'site' => $site, 'status' => 'skipped', 'error' => 'Changed after the original batch, so it is left as is.', 'patch' => $patch, 'expect' => $row['expect'] ); }
 				$before = Fleet::profile( $site );
 				$after = $write( static fn() => Fleet::save_profile( $site, $patch, null, '', true ) );
 				$changed = array_intersect_key( $before['values'] ?? array(), $patch ) != array_intersect_key( $after['values'] ?? array(), $patch ); // phpcs:ignore Universal.Operators.StrictComparisons.LooseNotEqual -- Order-insensitive array comparison.
-				return array( 'site' => $site, 'before' => array_intersect_key( $before['values'] ?? array(), $patch ), 'after' => array_intersect_key( $after['values'] ?? array(), $patch ), 'hash' => Fleet::hash( $before ), 'status' => $import && ! $changed ? 'unchanged' : 'ready' ) + ( $import ? array( 'patch' => $patch ) : array() );
+				return array( 'site' => $site, 'before' => array_intersect_key( $before['values'] ?? array(), $patch ), 'after' => array_intersect_key( $after['values'] ?? array(), $patch ), 'hash' => Fleet::hash( $before ), 'status' => $import && ! $changed ? 'unchanged' : 'ready' ) + ( $import ? array( 'patch' => $patch ) : array() ) + ( isset( $row['expect'] ) ? array( 'expect' => $row['expect'] ) : array() );
 			}
 			if ( 'ready' !== ( $row['status'] ?? '' ) ) { return $row; }
 			try {
@@ -249,7 +267,8 @@ class Fleet_Jobs {
 			}
 			$replaced = 0;
 			foreach ( $row['matches'] as $k => $m ) {
-				$result = isset( $j['left_out'][ $i . ':' . $m['post'] ] ) ? 'left out' : Fleet_Replace::replace_post( (int) $m['post'], $j['replace'], (string) $m['hash'] );
+				Fleet_Undo::$batch = $j['id'];
+				try { $result = isset( $j['left_out'][ $i . ':' . $m['post'] ] ) ? 'left out' : Fleet_Replace::replace_post( (int) $m['post'], $j['replace'], (string) $m['hash'] ); } finally { Fleet_Undo::$batch = ''; }
 				$row['matches'][ $k ]['result'] = $result;
 				if ( 'replaced' === $result ) { ++$replaced; }
 			}
@@ -268,7 +287,13 @@ class Fleet_Jobs {
 		$j['phase'] = $phase;
 		if ( $error ) { $j['error'] = $error; }
 		self::store( $j ); self::deactivate( (int) $j['user'] );
-		if ( $applying ) { self::audit( $j ); }
+		if ( $applying ) {
+			self::audit( $j );
+			// Keep what this batch changed so it can be undone; an undo can be offered once.
+			Fleet_Undo::capture( $j, self::all_rows( $j ) );
+			if ( isset( $j['undo']['batch'] ) ) { Fleet_Undo::mark_undone( $j['undo']['batch'], $j['id'] ); }
+		}
+		if ( 'stopped' === $phase ) { Fleet_Alerts::batch_stopped( $j ); }
 		return $j;
 	}
 	/** Activity is a log, not a gate: a busy log never stops a batch. */
@@ -339,7 +364,9 @@ class Fleet_Jobs {
 		Fleet_Segments::rebuild( max( 1, $until - microtime( true ) ) );
 		Fleet_Cache::drain( $until - microtime( true ) );
 		Fleet::index_managed_sites( 1000 );
-		if ( get_network_option( get_current_network_id(), self::ACTIVE, array() ) || Fleet_Cache::pending() || Fleet_Segments::pending() ) { return; }
+		Fleet_Overrides::backfill( 1000 );
+		Fleet_Undo::cleanup( max( 1, $until - microtime( true ) ) );
+		if ( get_network_option( get_current_network_id(), self::ACTIVE, array() ) || Fleet_Cache::pending() || Fleet_Segments::pending() || Fleet_Undo::pending_cleanup() || ! Fleet_Overrides::indexed() ) { return; }
 		// Idle: stop ticking until wake() is called again.
 		wp_clear_scheduled_hook( self::HOOK );
 	}

@@ -122,7 +122,9 @@ class Fleet_Import {
 			foreach ( $columns as $column ) {
 				// An empty cell leaves the site's value as it is.
 				if ( '' === $row[ $column ] ) { continue; }
-				try { $patch[ $column ] = Fleet::clean( $row[ $column ], $defs[ $column ] ); } catch ( \InvalidArgumentException $e ) { $note( sprintf( 'Row %d (%s), %s: %s', $line, $value, $column, $e->getMessage() ) ); }
+				// Values exported from Brand Fleet carry an apostrophe before anything a spreadsheet would run as a formula.
+				$cell = preg_match( '/^\'[=+\-@\t\r]/', $row[ $column ] ) ? substr( $row[ $column ], 1 ) : $row[ $column ];
+				try { $patch[ $column ] = Fleet::clean( $cell, $defs[ $column ] ); } catch ( \InvalidArgumentException $e ) { $note( sprintf( 'Row %d (%s), %s: %s', $line, $value, $column, $e->getMessage() ) ); }
 			}
 			if ( $patch ) { $plan[ $site ] = $patch; }
 		}
@@ -166,6 +168,7 @@ class Fleet_Import {
 			$last = array( 'time' => gmdate( 'c' ), 'status' => 'started', 'batch' => $j['id'], 'sites' => count( $j['ids'] ) );
 		} catch ( \Throwable $e ) {
 			$last = array( 'time' => gmdate( 'c' ), 'status' => 'failed', 'error' => $e->getMessage() );
+			Fleet_Alerts::import_failed( $e->getMessage(), (int) $settings['owner'] );
 		} finally {
 			wp_set_current_user( $previous );
 		}

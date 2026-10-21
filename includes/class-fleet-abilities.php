@@ -7,6 +7,7 @@ class Fleet_Abilities {
 	public function init(): void {
 		add_action( 'wp_abilities_api_categories_init', static function () { wp_register_ability_category( 'brand-fleet', array( 'label' => 'Brand Fleet', 'description' => 'Network variable governance.' ) ); } );
 		add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
+		add_action( 'wp_abilities_api_init', array( $this, 'register_trust' ) );
 	}
 	public function register(): void {
 		$integer = array( 'type' => 'integer', 'minimum' => 1 );
@@ -76,8 +77,40 @@ class Fleet_Abilities {
 			}
 		);
 	}
+	/** Abilities for values export, history, overrides, undo, change requests and local SEO. */
+	public function register_trust(): void {
+		$integer = array( 'type' => 'integer', 'minimum' => 1 );
+		$this->ability(
+			'export-values',
+			array( 'site_ids' => array( 'type' => 'array', 'items' => $integer, 'maxItems' => 10000 ), 'segment' => array( 'type' => 'string' ), 'mode' => array( 'type' => 'string', 'enum' => array( 'own', 'shown' ), 'default' => 'own' ) ),
+			array(),
+			static function ( $in ) {
+				$ids = ! empty( $in['site_ids'] ) ? $in['site_ids'] : ( ! empty( $in['segment'] ) ? Fleet_Segments::sites( sanitize_key( $in['segment'] ) ) : Fleet_Overrides::fleet_sites() );
+				return array( 'csv' => Fleet_Export::csv( $ids, (string) ( $in['mode'] ?? 'own' ) ) );
+			},
+			true,
+			'Read-only. Every fleet site\'s values as CSV (header: site_id, domain, then variable keys), or only site_ids or a segment. mode=own gives each site\'s own values (empty = uses the shared value) and imports straight back with preview-import; mode=shown gives what each site displays.'
+		);
+		$this->ability( 'site-history', array( 'site_id' => $integer ), array( 'site_id' ), static fn( $in ) => array( 'history' => array_reverse( Fleet_History::get( (int) $in['site_id'] ) ) ), true, 'Read-only. The last 100 changes to one site\'s own values, newest first: time, user, key, old, new (null = uses the shared value), via (edit, bulk, import, undo, request, restore).' );
+		$this->ability(
+			'overrides',
+			array( 'key' => array( 'type' => 'string' ) ),
+			array(),
+			static function ( $in ) {
+				if ( ! empty( $in['key'] ) ) { return array( 'key' => $in['key'], 'site_ids' => Fleet_Overrides::sites( sanitize_key( $in['key'] ) ) ); }
+				return array( 'fleet_sites' => Fleet_Overrides::fleet_count(), 'indexed' => Fleet_Overrides::indexed(), 'overrides' => array_map( static fn( $key ) => Fleet_Overrides::count( $key ), array_combine( array_keys( Fleet_Overrides::variables() ), array_keys( Fleet_Overrides::variables() ) ) ) );
+			},
+			true,
+			'Read-only. Without key: per variable, how many fleet sites set their own value instead of the shared one. With key: those site IDs (reset them with preview-bulk and a null value).'
+		);
+		$this->ability( 'list-undo', array(), array(), static fn( $in ) => array( 'batches' => array_reverse( Fleet_Undo::index(), true ) ), true, 'Read-only. The newest 10 applied batches that keep undo data: id, kind, label, sites, and undone (the undo batch id) once undone.' );
+		$this->ability( 'preview-undo', array( 'batch' => array( 'type' => 'string' ) ), array( 'batch' ), static fn( $in ) => Fleet_Jobs::view( Fleet_Undo::start( (string) $in['batch'] ) ), false, 'Starts a reviewed undo of an applied batch (see list-undo). Poll bulk-status, then advance-bulk with confirm=true. Sites or pages edited after the original batch are skipped. Each batch can be undone once.' );
+		$this->ability( 'list-requests', array(), array(), static fn( $in ) => array( 'pending' => Fleet_Requests::pending() ), true, 'Read-only. Open change requests from site admins: id, site, key, value (already validated), note, user, time.' );
+		$this->ability( 'decide-request', array( 'id' => array( 'type' => 'string' ), 'approve' => array( 'type' => 'boolean' ), 'reason' => array( 'type' => 'string', 'maxLength' => 500 ) ), array( 'id', 'approve' ), static fn( $in ) => Fleet_Requests::decide( (string) $in['id'], (bool) $in['approve'], (string) ( $in['reason'] ?? '' ) ), false, 'Approve (sets the value on that site) or decline one change request. The requester gets an email.' );
+		$this->ability( 'local-seo-preview', array( 'site_id' => $integer ), array( 'site_id' ), static fn( $in ) => array( 'settings' => Fleet_Schema::settings(), 'json_ld' => Fleet_Schema::data( (int) $in['site_id'], array( 'enabled' => true ) + Fleet_Schema::settings() ) ), true, 'Read-only. The schema.org LocalBusiness JSON-LD one site would print with the current Local SEO settings, even while output is turned off.' );
+	}
 	/** Which fleet capability each ability needs; anything not listed needs a network admin. */
-	const NEEDS = array( 'inspect' => 'any', 'save-definition' => 'manage', 'save-segments' => 'manage', 'export-definitions' => 'manage', 'import-definitions' => 'manage', 'configure-site' => 'values', 'preview-bulk' => 'bulk', 'preview-replace' => 'bulk', 'preview-import' => 'bulk', 'preview-token-report' => 'bulk', 'bulk-status' => 'bulk', 'advance-bulk' => 'bulk', 'cancel-bulk' => 'bulk' );
+	const NEEDS = array( 'inspect' => 'any', 'save-definition' => 'manage', 'save-segments' => 'manage', 'export-definitions' => 'manage', 'import-definitions' => 'manage', 'configure-site' => 'values', 'preview-bulk' => 'bulk', 'preview-replace' => 'bulk', 'preview-import' => 'bulk', 'preview-token-report' => 'bulk', 'bulk-status' => 'bulk', 'advance-bulk' => 'bulk', 'cancel-bulk' => 'bulk', 'export-values' => 'bulk', 'site-history' => 'values', 'overrides' => 'values', 'list-undo' => 'bulk', 'preview-undo' => 'bulk', 'list-requests' => 'values', 'decide-request' => 'values', 'local-seo-preview' => 'manage' );
 	public static function allowed( string $name ): bool {
 		$need = self::NEEDS[ $name ] ?? '';
 		if ( 'any' === $need ) { return Fleet::can_any(); }

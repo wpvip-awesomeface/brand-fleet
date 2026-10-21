@@ -12,7 +12,7 @@ class Fleet {
 	/** Exception code for a held lock: callers may wait and retry. */
 	const BUSY = 409;
 	/** Value types and their admin labels. A definition's type never changes after creation. */
-	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number', 'select' => 'Dropdown', 'toggle' => 'Yes / No', 'date' => 'Date', 'embed' => 'Embed code' );
+	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number', 'select' => 'Dropdown', 'toggle' => 'Yes / No', 'date' => 'Date', 'hours' => 'Opening hours', 'list' => 'List', 'embed' => 'Embed code' );
 	/** Optional definition settings; older definitions may not carry them. */
 	const EXTRAS = array( 'help' => '', 'group' => '', 'options' => array(), 'placement' => 'head', 'targets' => array(), 'segment' => '', 'segment_defaults' => array(), 'identifier' => false );
 	/** Where an embed prints. */
@@ -32,6 +32,16 @@ class Fleet {
 	public static function import_write( callable $callback ) {
 		self::$importing = true;
 		try { return $callback(); } finally { self::$importing = false; }
+	}
+
+	/** Why values are changing, for value history: edit, bulk, import, undo, request or restore. */
+	private static string $via = '';
+	public static function via( string $via, callable $callback ) {
+		$previous = self::$via; self::$via = $via;
+		try { return $callback(); } finally { self::$via = $previous; }
+	}
+	public static function current_via(): string {
+		return self::$via ? self::$via : ( self::$importing ? 'import' : ( self::$bulk ? 'bulk' : 'edit' ) );
 	}
 
 	public static function network_admin(): bool {
@@ -107,6 +117,10 @@ class Fleet {
 				$date = \DateTimeImmutable::createFromFormat( '!Y-m-d', $value );
 				if ( ! $date || $date->format( 'Y-m-d' ) !== $value ) { throw new \InvalidArgumentException( 'Enter a date as YYYY-MM-DD.' ); }
 				return $value;
+			case 'hours':
+				return Fleet_Hours::clean( $value );
+			case 'list':
+				return self::list_items( $value );
 			case 'embed':
 				// Raw markup by design: only network admins who may post unfiltered HTML can save it (see validate_definition()).
 				return $value;
@@ -183,8 +197,19 @@ class Fleet {
 		if ( ! $options || count( $options ) > 50 ) { throw new \InvalidArgumentException( 'List 1 to 50 dropdown options, one per line.' ); }
 		return $options;
 	}
-	/** What a token shows: the stored value, formatted for toggles and dates. */
+	/** One item per line (or "a | b" from a spreadsheet cell): up to 100 plain-text items. */
+	private static function list_items( string $value ): string {
+		$items = preg_split( str_contains( $value, "\n" ) ? '/\R/' : '/\s*\|\s*/', $value );
+		$items = array_values( array_filter( array_map( static fn( $item ) => mb_substr( sanitize_text_field( $item ), 0, 200 ), $items ), 'strlen' ) );
+		if ( count( $items ) > 100 ) { throw new \InvalidArgumentException( 'A list can have up to 100 items.' ); }
+		return implode( "\n", $items );
+	}
+	/** List items from a stored list value. */
+	public static function items( string $value ): array { return '' === $value ? array() : explode( "\n", $value ); }
+	/** What a token shows: the stored value, formatted for toggles, dates, hours and lists. */
 	public static function display( array $d, string $value ): string {
+		if ( 'hours' === $d['type'] ) { return Fleet_Hours::display( $value ); }
+		if ( 'list' === $d['type'] ) { return implode( ', ', self::items( $value ) ); }
 		if ( 'toggle' === $d['type'] && '' !== $value ) { $labels = self::options( 'toggle', $d['options'] ?? array() ); return '1' === $value ? $labels[0] : $labels[1]; }
 		if ( 'date' === $d['type'] && '' !== $value ) { $time = strtotime( $value . ' 12:00:00 UTC' ); return $time ? wp_date( (string) get_option( 'date_format' ), $time ) : $value; }
 		return $value;
@@ -313,6 +338,8 @@ class Fleet {
 			if ( $previous && $previous !== $current ) { delete_site_meta( $site, 'brand_fleet_' . $relation . '_' . $previous ); }
 			if ( $current ) { update_site_meta( $site, 'brand_fleet_' . $relation . '_' . $current, 1 ); }
 		}
+		Fleet_History::record( $site, (array) ( $old['values'] ?? array() ), (array) ( $p['values'] ?? array() ) );
+		Fleet_Overrides::index_site( $site, $p, $old );
 		self::audit( 'site', $site, array_keys( $patch ) );
 		if ( ! self::$bulk ) { Fleet_Cache::schedule( $site ); }
 		return $p;
@@ -379,7 +406,7 @@ class Fleet {
 	public static function audit_job( array $job ): void {
 		$counts = Fleet_Jobs::counts( $job );
 		$details = $job['sample'] ?? array();
-		self::record_activity( array( 'batch' => $job['id'], 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => 'bulk', 'keys' => array_keys( $job['patch'] ), 'total' => count( $job['ids'] ), 'updated' => $counts['updated'] ?? 0, 'skipped' => $counts['skipped'] ?? 0, 'phase' => $job['phase'], 'details' => $details ) + ( isset( $job['replace'] ) ? array( 'replace' => array_intersect_key( $job['replace'], array( 'find' => 1, 'with' => 1 ) ) ) : array() ) );
+		self::record_activity( array( 'batch' => $job['id'], 'kind' => $job['kind'] ?? 'bulk', 'label' => Fleet_Undo::label( $job ), 'time' => gmdate( 'c' ), 'user' => get_current_user_id(), 'action' => 'bulk', 'keys' => array_keys( $job['patch'] ), 'total' => count( $job['ids'] ), 'updated' => $counts['updated'] ?? 0, 'skipped' => $counts['skipped'] ?? 0, 'phase' => $job['phase'], 'details' => $details ) + ( isset( $job['replace'] ) ? array( 'replace' => array_intersect_key( $job['replace'], array( 'find' => 1, 'with' => 1 ) ) ) : array() ) );
 	}
 	private static function record_activity( array $entry ): void {
 		self::locked( 'audit', static function () use ( $entry ) {

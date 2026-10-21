@@ -10,6 +10,7 @@ class Fleet_Admin {
 		add_action( 'admin_menu', array( $this, 'main_site_menu' ) );
 		add_action( 'admin_post_brand_fleet_save', array( $this, 'save' ) );
 		add_action( 'admin_post_brand_fleet_export', array( $this, 'export' ) );
+		add_action( 'admin_post_brand_fleet_export_values', array( $this, 'export_values' ) );
 		add_action( 'wp_ajax_brand_fleet_batch', array( $this, 'batch' ) );
 		add_action( 'wp_ajax_brand_fleet_replace_exclude', array( $this, 'exclude' ) );
 		add_filter( 'network_admin_plugin_action_links_' . plugin_basename( BRAND_FLEET_DIR . 'brand-fleet.php' ), array( $this, 'network_action_links' ) );
@@ -36,7 +37,7 @@ class Fleet_Admin {
 	}
 	private static function url( array $args = array() ): string { return add_query_arg( $args, Fleet::network_admin() ? network_admin_url( 'admin.php?page=brand-fleet' ) : get_admin_url( (int) get_main_site_id(), 'admin.php?page=brand-fleet' ) ); }
 	/** Tabs and the capability each needs. */
-	const TABS = array( 'sites' => array( 'Sites', 'values' ), 'definitions' => array( 'Variables', 'manage' ), 'segments' => array( 'Segments', 'manage' ), 'bulk' => array( 'Bulk update', 'bulk' ), 'replace' => array( 'Find & replace', 'bulk' ), 'import' => array( 'Import', 'bulk' ), 'tokens' => array( 'Token check', 'bulk' ), 'access' => array( 'Access', 'network' ), 'audit' => array( 'Activity', 'any' ) );
+	const TABS = array( 'sites' => array( 'Sites', 'values' ), 'requests' => array( 'Requests', 'values' ), 'definitions' => array( 'Variables', 'manage' ), 'segments' => array( 'Segments', 'manage' ), 'seo' => array( 'Local SEO', 'manage' ), 'bulk' => array( 'Bulk update', 'bulk' ), 'replace' => array( 'Find & replace', 'bulk' ), 'import' => array( 'Import', 'bulk' ), 'overrides' => array( 'Overrides', 'values' ), 'tokens' => array( 'Token check', 'bulk' ), 'access' => array( 'Access', 'network' ), 'audit' => array( 'Activity', 'any' ) );
 	private static function allowed( string $need ): bool {
 		if ( 'any' === $need ) { return Fleet::can_any(); }
 		return 'network' === $need ? Fleet::network_admin() : Fleet::can( $need );
@@ -68,6 +69,13 @@ class Fleet_Admin {
 		switch ( $type ) {
 			case 'textarea':
 				echo '<textarea class="large-text" rows="3" ' . $base . '>' . esc_textarea( $value ) . '</textarea>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+				return;
+			case 'hours':
+				// Saved hours come back one day per line, the way people type them.
+				echo '<textarea class="large-text code" rows="5" placeholder="' . esc_attr( Fleet_Hours::EXAMPLE ) . '" ' . $base . '>' . esc_textarea( Fleet_Hours::editable( $value ) ) . '</textarea><span class="description">One day or date per line, for example <code>Mon-Fri 9:00-17:00</code>, <code>Sat 10am-2pm</code>, <code>Sun closed</code> or <code>2026-12-24 9-12</code>.</span>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
+				return;
+			case 'list':
+				echo '<textarea class="large-text" rows="4" placeholder="' . esc_attr( "First item\nSecond item" ) . '" ' . $base . '>' . esc_textarea( $value ) . '</textarea><span class="description">One item per line.</span>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
 				return;
 			case 'embed':
 				echo '<textarea class="large-text code" rows="6" spellcheck="false" ' . $base . '>' . esc_textarea( $value ) . '</textarea>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $base is built from escaped parts above.
@@ -127,6 +135,8 @@ class Fleet_Admin {
 		if ( '' === $value ) { return '<em>Empty</em>'; }
 		if ( 'embed' === $type ) { return esc_html( Fleet::PLACEMENTS[ $d['placement'] ?? 'head' ] ?? '' ) . '<br><small>' . esc_html( empty( $d['targets'] ) ? 'All enrolled sites' : count( $d['targets'] ) . ' selected sites' ) . '</small>'; }
 		if ( $d && in_array( $type, array( 'toggle', 'date' ), true ) ) { return esc_html( Fleet::display( $d, $value ) ); }
+		if ( 'hours' === $type ) { try { $hours = Fleet_Hours::parse( $value ); } catch ( \InvalidArgumentException $e ) { return esc_html( $value ); } return implode( '<br>', array_map( static fn( $row ) => '<strong>' . esc_html( $row['days'] ) . '</strong> ' . esc_html( $row['times'] ), Fleet_Hours::weekly_rows( $hours ) ) ) . ( $hours['dates'] ? '<br><small>' . esc_html( sprintf( _n( '%d special date', '%d special dates', count( $hours['dates'] ), 'brand-fleet' ), count( $hours['dates'] ) ) ) . '</small>' : '' ); }
+		if ( 'list' === $type ) { $items = Fleet::items( $value ); return esc_html( implode( ', ', array_slice( $items, 0, 5 ) ) ) . ( count( $items ) > 5 ? esc_html( sprintf( ' +%d more', count( $items ) - 5 ) ) : '' ); }
 		if ( 'color' === $type && sanitize_hex_color( $value ) ) { return '<span class="brand-fleet-swatch" style="background:' . esc_attr( $value ) . '"></span> <code>' . esc_html( $value ) . '</code>'; }
 		if ( 'image' === $type ) { return '<img class="brand-fleet-thumb" alt="" src="' . esc_url( $value ) . '"><br><a href="' . esc_url( $value ) . '" target="_blank" rel="noopener">' . esc_html( wp_basename( (string) wp_parse_url( $value, PHP_URL_PATH ) ) ) . '</a>'; }
 		return nl2br( esc_html( $value ) );
@@ -162,11 +172,33 @@ class Fleet_Admin {
 		}
 		echo '</table>';
 	}
+	/** Recent changes to one site's own values, newest first, each with a way back. */
+	public static function history( int $site ): void {
+		$log = Fleet_History::get( $site ); $defs = Fleet::definitions();
+		if ( ! $log ) { return; }
+		echo '<details class="brand-fleet-panel brand-fleet-history"><summary>' . esc_html( sprintf( 'Value history (%d changes)', count( $log ) ) ) . '</summary><p class="description">The last 100 changes to this site\'s own values. Restore puts one value back the way it was before that change.</p><table class="widefat striped"><thead><tr><th scope="col">When (UTC)</th><th scope="col">Who</th><th scope="col">Variable</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">How</th><th scope="col"><span class="screen-reader-text">Restore</span></th></tr></thead><tbody>';
+		$shown = 0;
+		foreach ( array_reverse( $log, true ) as $index => $entry ) {
+			if ( ++$shown > 50 ) { break; }
+			$d = $defs[ $entry['key'] ] ?? array( 'type' => 'text', 'label' => $entry['key'] );
+			$user = get_userdata( (int) $entry['user'] );
+			$value = static fn( $v ) => null === $v ? '<span class="description">Shared value</span>' : self::preview( $d['type'], (string) $v, $d );
+			echo '<tr><td>' . esc_html( gmdate( 'M j, Y H:i', strtotime( $entry['time'] ) ) ) . '</td><td>' . esc_html( $user ? $user->display_name : '—' ) . '</td><td>' . esc_html( $d['label'] ) . '</td><td>' . $value( $entry['old'] ) . '</td><td>' . $value( $entry['new'] ) . '</td><td>' . esc_html( Fleet_History::VIA[ $entry['via'] ] ?? $entry['via'] ) . '</td><td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- preview() escapes its output.
+			if ( isset( $defs[ $entry['key'] ] ) && empty( $entry['long'] ) && ( Fleet::can( 'values' ) || Fleet::editable( $d, $site ) ) ) {
+				self::begin( 'restore' );
+				echo '<input type="hidden" name="site_id" value="' . esc_attr( (string) $site ) . '"><input type="hidden" name="index" value="' . esc_attr( (string) $index ) . '"><input type="hidden" name="entry" value="' . esc_attr( Fleet::hash( $entry ) ) . '"><button class="button button-small" aria-label="' . esc_attr( 'Restore ' . $d['label'] . ' to its value before this change' ) . '">Restore</button></form>';
+			}
+			echo '</td></tr>';
+		}
+		echo '</tbody></table></details>';
+	}
 	public function local(): void {
 		echo '<div class="wrap brand-fleet"><h1>Brand Identity</h1><p>These values fill in the {{tokens}} on your site. Check “Use a value just for this site” to set your own; uncheck it to go back to the shared value. Only fields your network lets you edit are shown.</p>';
 		self::begin( 'site' );
 		echo '<input type="hidden" name="site_id" value="' . esc_attr( (string) get_current_blog_id() ) . '">';
-		self::values( get_current_blog_id() ); submit_button( 'Save site variables' ); echo '</form></div>';
+		self::values( get_current_blog_id() ); submit_button( 'Save site variables' ); echo '</form>';
+		self::history( get_current_blog_id() );
+		self::request_form( get_current_blog_id() ); echo '</div>';
 	}
 	public function render(): void {
 		if ( ! Fleet::can_any() ) { return; }
@@ -177,14 +209,18 @@ class Fleet_Admin {
 		if ( ! isset( $tabs[ $tab ] ) ) { $tab = (string) array_key_first( $tabs ); }
 		wp_enqueue_style( 'brand-fleet-admin', BRAND_FLEET_URL . 'assets/fleet-admin.css', array(), BRAND_FLEET_VERSION );
 		echo '<div class="wrap brand-fleet"><h1>Brand Fleet</h1><nav class="nav-tab-wrapper" aria-label="Brand Fleet sections">';
-		foreach ( $tabs as $key => $label ) { echo '<a class="nav-tab' . ( $key === $tab ? ' nav-tab-active" aria-current="page' : '' ) . '" href="' . esc_url( self::url( array( 'tab' => $key ) ) ) . '">' . esc_html( $label ) . '</a>'; }
+		$open = isset( $tabs['requests'] ) ? count( Fleet_Requests::pending() ) : 0;
+		foreach ( $tabs as $key => $label ) { echo '<a class="nav-tab' . ( $key === $tab ? ' nav-tab-active" aria-current="page' : '' ) . '" href="' . esc_url( self::url( array( 'tab' => $key ) ) ) . '">' . esc_html( $label ) . ( 'requests' === $key && $open ? ' <span class="brand-fleet-count" aria-label="' . esc_attr( sprintf( '%d open', $open ) ) . '">' . esc_html( (string) $open ) . '</span>' : '' ) . '</a>'; } // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Each part is escaped inline.
 		echo '</nav>';
 		self::enqueue_fields();
 		if ( 'definitions' === $tab ) { $this->definitions(); }
 		elseif ( 'bulk' === $tab ) { $this->bulk(); }
 		elseif ( 'replace' === $tab ) { $this->replace(); }
 		elseif ( 'segments' === $tab ) { $this->segments(); }
+		elseif ( 'seo' === $tab ) { $this->seo(); }
 		elseif ( 'import' === $tab ) { $this->import(); }
+		elseif ( 'overrides' === $tab ) { $this->overrides(); }
+		elseif ( 'requests' === $tab ) { $this->requests(); }
 		elseif ( 'tokens' === $tab ) { $this->tokens(); }
 		elseif ( 'access' === $tab ) { $this->access(); }
 		elseif ( 'audit' === $tab ) { $this->activity(); }
@@ -192,6 +228,9 @@ class Fleet_Admin {
 		echo '</div>';
 	}
 	private function activity(): void {
+		$current = Fleet_Jobs::get();
+		$batch = isset( $_GET['batch'] ) ? sanitize_text_field( wp_unslash( $_GET['batch'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only batch view.
+		if ( $current && $batch === $current['id'] && in_array( $current['kind'] ?? '', array( 'undo', 'revert' ), true ) ) { $this->undo_view( $current ); return; }
 		$log = array_reverse( (array) get_network_option( get_current_network_id(), 'brand_fleet_audit', array() ) );
 		$groups = array(); $defs = Fleet::definitions();
 		foreach ( $log as $row ) {
@@ -219,10 +258,12 @@ class Fleet_Admin {
 			$user = get_userdata( (int) $row['user'] );
 			$labels = array_map( static fn( $key ) => $defs[ $key ]['label'] ?? $key, $row['keys'] );
 			$is_bulk = 'bulk' === $row['action'];
-			$action = $is_bulk ? ( isset( $row['replace'] ) ? 'Find & replace: “' . $row['replace']['find'] . '” → “' . $row['replace']['with'] . '”' . ( 'complete' === $row['phase'] ? '' : ' (in progress / paused)' ) : ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) ) : ( 'definition' === $row['action'] ? 'Variable definition saved' : ( 'import' === $row['action'] ? 'Definitions imported' : ( 'meta-keys' === $row['action'] ? 'Custom fields updated' : ( 'segments' === $row['action'] ? 'Segments saved' : ( 'access' === $row['action'] ? 'Access changed' : ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) ) ) ) ) );
+			$labels_by_action = array( 'definition' => 'Variable definition saved', 'import' => 'Definitions imported', 'meta-keys' => 'Custom fields updated', 'segments' => 'Segments saved', 'access' => 'Access changed', 'closures' => 'Holiday closures saved', 'local-seo' => 'Local SEO settings saved', 'alerts' => 'Email alerts changed', 'export-values' => 'Values downloaded', 'request' => 'Change requested', 'request-approved' => 'Change request approved', 'request-declined' => 'Change request declined' );
+			$action = $is_bulk ? ( isset( $row['label'] ) ? $row['label'] . ( 'complete' === $row['phase'] ? '' : ' (' . ( 'apply' === $row['phase'] ? 'in progress' : $row['phase'] ) . ')' ) : ( isset( $row['replace'] ) ? 'Find & replace: “' . $row['replace']['find'] . '” → “' . $row['replace']['with'] . '”' . ( 'complete' === $row['phase'] ? '' : ' (in progress / paused)' ) : ( 'complete' === $row['phase'] ? 'Bulk update completed' : 'Bulk update in progress / paused' ) ) ) : ( $labels_by_action[ $row['action'] ] ?? ( count( $row['sites'] ) > 1 ? 'Similar site edits' : 'Site updated' ) );
 			echo '<tr><td>' . esc_html( gmdate( 'M j, Y H:i', strtotime( $row['time'] ) ) ) . '</td><td>' . esc_html( $user ? $user->display_name : 'Deleted user' ) . '</td><td>' . esc_html( $action ) . '</td><td>' . esc_html( $labels ? implode( ', ', $labels ) : 'Connections / enrollment' ) . '</td><td>';
 			if ( $is_bulk ) {
 				echo esc_html( sprintf( '%d sites: %d updated, %d skipped, %d pending', $row['total'], $row['updated'], $row['skipped'], max( 0, $row['total'] - $row['updated'] - $row['skipped'] ) ) );
+				self::undo_button( (string) $row['batch'] );
 				if ( $row['details'] ) {
 					echo '<details><summary>View site sample</summary><ul>';
 					foreach ( $row['details'] as $detail ) { echo '<li>' . esc_html( Site_Picker::label( (int) $detail['site'] ) . ' — ' . $detail['status'] . ( isset( $detail['error'] ) ? ': ' . $detail['error'] : '' ) ) . '</li>'; }
@@ -275,6 +316,7 @@ class Fleet_Admin {
 			self::begin( 'meta-keys' );
 			echo '<p><label>Also use variables in these custom fields<br><textarea class="large-text code" rows="2" name="meta_keys" placeholder="for example: hero_subtitle, store_hours">' . esc_textarea( implode( ', ', Fleet::meta_keys() ) ) . '</textarea></label></p><p class="description">Enter custom field (post meta) keys, separated by commas. On the live site, {{tokens}} in these fields show each site\'s own value. Up to 50 fields.</p>';
 			submit_button( 'Save custom fields', 'secondary' ); echo '</form></details>';
+			self::closures_panel();
 			return;
 		}
 		echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'definitions' ) ) ) . '">← All variables</a></p>';
@@ -292,7 +334,7 @@ class Fleet_Admin {
 		echo '<h3>2. Choose what kind of value</h3>';
 		if ( $edit ) { echo '<p><strong>' . esc_html( Fleet::TYPES[ $type ] ?? $type ) . '</strong> <span class="description">(cannot change after creation)</span></p><input type="hidden" name="type" value="' . esc_attr( $type ) . '">'; }
 		else {
-			$hints = array( 'text' => 'One line of text.', 'textarea' => 'Several lines, like an address.', 'url' => 'A web address.', 'image' => 'A logo or photo: paste a link or upload one.', 'email' => 'An email address.', 'phone' => 'A phone number; also works in tel: links.', 'color' => 'A brand color with a color picker.', 'number' => 'A number.', 'select' => 'Pick one choice from a list you define.', 'toggle' => 'Yes or no, shown with your own wording.', 'date' => 'A date, shown in each site\'s date format.', 'embed' => 'Script or HTML (analytics, chat) added to every site. Network admins only.' );
+			$hints = array( 'text' => 'One line of text.', 'textarea' => 'Several lines, like an address.', 'url' => 'A web address.', 'image' => 'A logo or photo: paste a link or upload one.', 'email' => 'An email address.', 'phone' => 'A phone number; also works in tel: links.', 'color' => 'A brand color with a color picker.', 'number' => 'A number.', 'select' => 'Pick one choice from a list you define.', 'toggle' => 'Yes or no, shown with your own wording.', 'date' => 'A date, shown in each site\'s date format.', 'hours' => 'Opening hours, typed like Mon-Fri 9-5. Powers the Hours block, open-now and local search.', 'list' => 'Several items, like services or providers, one per line.', 'embed' => 'Script or HTML (analytics, chat) added to every site. Network admins only.' );
 			echo '<p><label>Type<br><select name="type">';
 			foreach ( Fleet::TYPES as $value => $label ) {
 				if ( 'embed' === $value && ! current_user_can( 'unfiltered_html' ) ) { continue; }
@@ -336,6 +378,21 @@ class Fleet_Admin {
 		foreach ( array( 'required' => 'Every site must end up with a value', 'clone' => 'Ask for this when a new site is added, and never copy it from the starting site', 'identifier' => 'Use it to find a site in imports, for example a practice code (text, number, email, phone or link)' ) as $key => $label ) { echo '<p><label><input type="checkbox" name="' . esc_attr( $key ) . '" value="1" ' . checked( ! empty( $d[ $key ] ), true, false ) . '> ' . esc_html( $label ) . '</label></p>'; }
 		echo '</div><input type="hidden" name="schema_hash" value="' . esc_attr( Fleet::hash( $defs ) ) . '">'; submit_button( $edit ? 'Save changes' : 'Add variable' ); echo '<a href="' . esc_url( self::url( array( 'tab' => 'definitions' ) ) ) . '">Cancel</a></div></form>';
 	}
+	/** Holiday closures every site's opening hours respect, optionally only in one segment. */
+	private static function closures_panel(): void {
+		$closures = Fleet_Hours::closures(); $segments = Fleet_Segments::all();
+		echo '<details class="brand-fleet-panel"' . ( isset( $_GET['closures'] ) ? ' open' : '' ) . '><summary>Holiday closures</summary><p class="description">Close every site, or every site in a segment, on a date. Sites with Opening hours variables show it in the Hours block and in search results. A site\'s own line for that date wins. Leave hours empty for closed, or type special hours like <code>9-12</code>.</p>'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only state.
+		self::begin( 'closures' );
+		echo '<table class="widefat brand-fleet-closures"><thead><tr><th scope="col">Date</th><th scope="col">Hours</th><th scope="col">Name</th>' . ( $segments ? '<th scope="col">Only in segment</th>' : '' ) . '</tr></thead><tbody>';
+		$rows = $closures; for ( $i = 0; $i < 3; ++$i ) { $rows[] = array( 'date' => '', 'hours' => '', 'label' => '', 'segment' => '' ); }
+		foreach ( $rows as $i => $row ) {
+			$name = 'closures[' . $i . ']';
+			echo '<tr><td><input type="date" name="' . esc_attr( $name . '[date]' ) . '" value="' . esc_attr( $row['date'] ) . '" aria-label="Date"></td><td><input type="text" class="regular-text" name="' . esc_attr( $name . '[hours]' ) . '" value="' . esc_attr( 'closed' === $row['hours'] ? '' : $row['hours'] ) . '" placeholder="Closed" aria-label="Hours"></td><td><input type="text" class="regular-text" maxlength="80" name="' . esc_attr( $name . '[label]' ) . '" value="' . esc_attr( $row['label'] ) . '" placeholder="for example Christmas Day" aria-label="Name"></td>';
+			if ( $segments ) { echo '<td><select name="' . esc_attr( $name . '[segment]' ) . '" aria-label="Segment"><option value="">Every site</option>'; foreach ( $segments as $slug => $segment ) { echo '<option value="' . esc_attr( $slug ) . '"' . selected( $slug, $row['segment'], false ) . '>' . esc_html( $segment['label'] ) . '</option>'; } echo '</select></td>'; }
+			echo '</tr>';
+		}
+		echo '</tbody></table><p class="description">Clear a date to remove that closure. Past dates can be removed once they are over.</p>'; submit_button( 'Save holiday closures', 'secondary' ); echo '</form></details>';
+	}
 	private function import(): void {
 		$settings = Fleet_Import::settings(); $matches = Fleet_Import::match_options();
 		if ( isset( $_GET['saved'] ) ) { echo '<div class="notice notice-success"><p>Saved.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
@@ -354,6 +411,13 @@ class Fleet_Admin {
 		echo '<p><label><input type="checkbox" name="auto" value="1"' . checked( ! empty( $settings['auto'] ), true, false ) . '> Import every day and apply without review</label><br><span class="description">Runs as you. Skipped on days when you have another batch open. Use this when the spreadsheet is the source of truth.</span></p>';
 		if ( ! empty( $settings['last'] ) ) { echo '<p class="description">' . esc_html( 'Last run ' . gmdate( 'M j, Y H:i', strtotime( (string) $settings['last']['time'] ) ) . ' UTC: ' . $settings['last']['status'] . ( isset( $settings['last']['error'] ) ? ' — ' . $settings['last']['error'] : '' ) . ( isset( $settings['last']['sites'] ) ? ' (' . $settings['last']['sites'] . ' sites)' : '' ) ) . '</p>'; }
 		submit_button( 'Save daily import', 'secondary' ); echo '</form></details>';
+		echo '<details class="brand-fleet-panel"' . ( $j ? '' : ' open' ) . '><summary>Download current values</summary><p class="description">Get every fleet site\'s values as a spreadsheet: edit it, then paste or link it above to import the changes back. Columns are variable keys; rows match by <code>site_id</code>.</p><form method="get" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"><input type="hidden" name="action" value="brand_fleet_export_values">';
+		wp_nonce_field( 'brand_fleet_export_values', '_wpnonce', false );
+		echo '<fieldset class="brand-fleet-choices"><legend>Which values?</legend>';
+		foreach ( Fleet_Export::MODES as $mode => $label ) { echo '<label><input type="radio" name="mode" value="' . esc_attr( $mode ) . '"' . checked( 'own', $mode, false ) . '> ' . esc_html( $label ) . '</label>'; }
+		echo '</fieldset>';
+		if ( Fleet_Segments::all() ) { self::select( 'segment', 'Sites', array( '' => 'Every site in the fleet' ) + array_map( static fn( $x ) => 'Sites in segment: ' . $x['label'], Fleet_Segments::all() ), '' ); }
+		submit_button( 'Download CSV', 'secondary', 'submit', false ); echo '</form></details>';
 		if ( ! $j ) { return; }
 		$source = (array) ( $j['import'] ?? array() );
 		echo '<div id="brand-fleet-current-batch"><h2>' . esc_html( 'Import from ' . ( $source['label'] ?? 'spreadsheet' ) ) . '</h2>';
@@ -446,6 +510,154 @@ class Fleet_Admin {
 		}
 		submit_button( 'Save segments' ); echo '</form>';
 	}
+	/** "Undo" for an applied batch, while it can still be undone. */
+	private static function undo_button( string $batch ): void {
+		if ( ! Fleet::can( 'bulk' ) ) { return; }
+		$e = Fleet_Undo::entry( $batch );
+		if ( ! $e ) { return; }
+		if ( ! empty( $e['undone'] ) ) { echo '<p class="description">Undone.</p>'; return; }
+		self::begin( 'undo' );
+		echo '<input type="hidden" name="batch" value="' . esc_attr( $batch ) . '"><p class="brand-fleet-actions"><button class="button">' . esc_html( sprintf( _n( 'Undo on %d site…', 'Undo on %d sites…', (int) $e['sites'], 'brand-fleet' ), (int) $e['sites'] ) ) . '</button> <span class="description">You see what would change first.</span></p></form>';
+	}
+	/** Preview and progress of an undo. */
+	private function undo_view( array $j ): void {
+		echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'audit' ) ) ) . '">← Activity</a></p><h2>' . esc_html( Fleet_Undo::label( $j ) ) . '</h2><p class="brand-fleet-intro">This puts back what that batch changed. Sites or pages edited since then are skipped and listed, never overwritten.</p>';
+		self::batch_controls( $j, 'Undo on these sites' );
+		if ( 'undo' === $j['kind'] ) { self::result_table( $j, 'audit' ); return; }
+		$rows = Fleet_Jobs::hit_rows( $j, 0, 100 );
+		echo '<table class="widefat brand-fleet-matches"><thead><tr><th scope="col">Page</th><th scope="col">Result</th></tr></thead>';
+		foreach ( $rows as $row ) {
+			echo '<tbody><tr class="brand-fleet-group"><th colspan="2" scope="colgroup">' . esc_html( Site_Picker::label( (int) $row['site'] ) ) . '</th></tr>';
+			foreach ( (array) $row['matches'] as $m ) { echo '<tr><td><a href="' . esc_url( get_admin_url( (int) $row['site'], 'post.php?post=' . (int) $m['post'] . '&action=edit' ) ) . '" target="_blank" rel="noopener">' . esc_html( '' !== $m['title'] ? $m['title'] : '(no title)' ) . '</a></td><td>' . esc_html( ucfirst( $m['result'] ?? ( $m['changed'] ? 'Edited since, will be left as is' : 'Will be restored' ) ) ) . '</td></tr>'; }
+			echo '</tbody>';
+		}
+		echo '</table>';
+	}
+	/** Change requests from sites, oldest first, with approve / decline. */
+	private function requests(): void {
+		$decided = isset( $_GET['decided'] ) ? sanitize_key( wp_unslash( $_GET['decided'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+		if ( $decided ) { echo '<div class="notice notice-success"><p>' . esc_html( 'approved' === $decided ? 'Approved. The site now shows the new value.' : 'Declined. The person who asked gets an email.' ) . '</p></div>'; }
+		$defs = Fleet::definitions(); $pending = Fleet_Requests::pending();
+		echo '<h2>Requests</h2><p class="brand-fleet-intro">Site admins can ask for a new value for something the network controls, such as their phone number or hours, from Settings → Brand Identity. Approving sets it on that site right away, and it shows in the site\'s value history.</p>';
+		if ( ! $pending ) { echo '<p>No open requests.</p>'; }
+		foreach ( $pending as $r ) {
+			$d = $defs[ $r['key'] ] ?? array( 'label' => $r['key'], 'type' => 'text' );
+			$user = get_userdata( (int) $r['user'] );
+			echo '<div class="brand-fleet-panel brand-fleet-request"><h3>' . esc_html( $d['label'] . ' — ' . Site_Picker::label( (int) $r['site'] ) ) . '</h3><p class="description">' . esc_html( 'Asked by ' . ( $user ? $user->display_name : 'a deleted user' ) . ' on ' . gmdate( 'M j, Y H:i', strtotime( $r['time'] ) ) . ' UTC' ) . '</p>';
+			echo '<table class="widefat"><tbody><tr><th scope="row">Now</th><td>' . self::preview( $d['type'], (string) Fleet::resolved( (int) $r['site'], $r['key'] )['value'], $d ) . '</td></tr><tr><th scope="row">Asked for</th><td>' . self::preview( $d['type'], (string) $r['value'], $d ) . '</td></tr>' . ( '' !== $r['note'] ? '<tr><th scope="row">Note</th><td>' . nl2br( esc_html( $r['note'] ) ) . '</td></tr>' : '' ) . '</tbody></table>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- preview() escapes its output.
+			self::begin( 'decide' );
+			echo '<input type="hidden" name="request" value="' . esc_attr( $r['id'] ) . '"><p><label>Note to the person who asked (optional)<br><input class="large-text" type="text" name="reason" maxlength="500"></label></p><p class="brand-fleet-actions"><button class="button button-primary" name="decision" value="approve">Approve</button> <button class="button" name="decision" value="decline">Decline</button></p></form></div>';
+		}
+		$done = array_slice( array_reverse( array_values( array_filter( Fleet_Requests::all(), static fn( $r ) => in_array( $r['status'], array( 'approved', 'declined' ), true ) ) ) ), 0, 20 );
+		if ( $done ) {
+			echo '<h3>Recently answered</h3><table class="widefat striped"><thead><tr><th scope="col">Site</th><th scope="col">Variable</th><th scope="col">Answer</th><th scope="col">By</th></tr></thead><tbody>';
+			foreach ( $done as $r ) {
+				$by = get_userdata( (int) $r['decided_by'] );
+				echo '<tr><td>' . esc_html( Site_Picker::label( (int) $r['site'] ) ) . '</td><td>' . esc_html( $defs[ $r['key'] ]['label'] ?? $r['key'] ) . '</td><td>' . esc_html( ucfirst( $r['status'] ) . ( '' !== $r['reason'] ? ' — ' . $r['reason'] : '' ) ) . '</td><td>' . esc_html( ( $by ? $by->display_name : '—' ) . ', ' . gmdate( 'M j', strtotime( $r['decided_at'] ) ) ) . '</td></tr>';
+			}
+			echo '</tbody></table>';
+		}
+	}
+	/** Site admins: ask the network for a value they cannot edit, and see earlier answers. */
+	private static function request_form( int $site ): void {
+		$defs = Fleet_Requests::requestable( $site );
+		if ( ! $defs || ! Fleet::profile( $site ) ) { return; }
+		echo '<h2 id="request">Ask for a change</h2><p>Some values are set by your network. If one is wrong for this site, ask for a new value and a fleet editor will review it.</p>';
+		if ( isset( $_GET['requested'] ) ) { echo '<div class="notice notice-success inline"><p>Sent. You will get an email when it is answered.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+		self::begin( 'request' );
+		echo '<input type="hidden" name="site_id" value="' . esc_attr( (string) $site ) . '"><p><label>Value<br><select name="key">';
+		foreach ( $defs as $key => $d ) { echo '<option value="' . esc_attr( $key ) . '">' . esc_html( $d['label'] ) . '</option>'; }
+		echo '</select></label></p><div class="brand-fleet-field"><span class="brand-fleet-field-label">New value</span>';
+		self::typed_inputs( 'key', 'value', array_map( static fn( $d ) => array( $d['type'], $d['options'] ?? array() ), $defs ), (string) array_key_first( $defs ), '', array( 'aria-label' => 'New value' ) );
+		echo '</div><p><label>Why (optional)<br><textarea class="large-text" rows="2" name="note" maxlength="500"></textarea></label></p>'; submit_button( 'Send request', 'secondary' ); echo '</form>';
+		$mine = Fleet_Requests::for_site( $site );
+		if ( $mine ) {
+			$states = array( 'pending' => 'waiting for review', 'approved' => 'approved', 'declined' => 'declined', 'replaced' => 'replaced by a newer request' );
+			echo '<h3>Earlier requests</h3><ul>';
+			foreach ( $mine as $r ) { echo '<li>' . esc_html( ( Fleet::definitions()[ $r['key'] ]['label'] ?? $r['key'] ) . ': ' . ( $states[ $r['status'] ] ?? $r['status'] ) . ( ! empty( $r['reason'] ) ? ' — ' . $r['reason'] : '' ) ) . '</li>'; }
+			echo '</ul>';
+		}
+	}
+	/** Which sites set their own value instead of the shared one, per variable, with a reviewed way to reset them. */
+	private function overrides(): void {
+		Fleet_Overrides::backfill();
+		$key = isset( $_GET['key'] ) ? sanitize_key( wp_unslash( $_GET['key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only navigation.
+		$vars = Fleet_Overrides::variables(); $fleet = Fleet_Overrides::fleet_count();
+		if ( ! Fleet_Overrides::indexed() ) { echo '<p class="brand-fleet-note">Counting existing sites in the background. Numbers may be low until it finishes; reload in a minute.</p>'; }
+		if ( '' === $key || ! isset( $vars[ $key ] ) ) {
+			echo '<h2>Overrides</h2><p class="brand-fleet-intro">See where sites have set their own value instead of using the shared one. A lot of sites overriding the same thing can mean the shared value is wrong, or that a value has drifted from brand. Imported variables show how many sites the spreadsheet has filled in.</p>';
+			echo '<table class="widefat striped"><thead><tr><th scope="col">Variable</th><th scope="col">Shared value</th><th scope="col">Sites with their own value</th><th scope="col"><span class="screen-reader-text">Details</span></th></tr></thead><tbody>';
+			foreach ( self::grouped( $vars ) as $group_defs ) {
+				foreach ( $group_defs as $k => $d ) {
+					$count = Fleet_Overrides::count( $k );
+					echo '<tr><td><strong>' . esc_html( $d['label'] ) . '</strong><br>' . self::token( $k ) . '</td><td>' . ( 'imported' === $d['scope'] ? '<span class="description">From an import</span>' : self::preview( $d['type'], (string) $d['default'], $d ) ) . '</td><td>' . esc_html( sprintf( '%d of %d', $count, $fleet ) ) . ( $fleet ? '<span class="brand-fleet-meter" aria-hidden="true"><span style="width:' . esc_attr( (string) round( 100 * $count / $fleet ) ) . '%"></span></span>' : '' ) . '</td><td>' . ( $count ? '<a href="' . esc_url( self::url( array( 'tab' => 'overrides', 'key' => $k ) ) ) . '">View sites</a>' : '' ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- token() and preview() escape their output.
+				}
+			}
+			if ( ! $vars ) { echo '<tr><td colspan="4">No variables can be set per site yet.</td></tr>'; }
+			echo '</tbody></table>';
+			return;
+		}
+		$d = $vars[ $key ]; $page = max( 1, isset( $_GET['paged'] ) ? absint( $_GET['paged'] ) : 1 ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$ids = Fleet_Overrides::sites( $key, $page ); $count = Fleet_Overrides::count( $key );
+		echo '<p><a href="' . esc_url( self::url( array( 'tab' => 'overrides' ) ) ) . '">← All variables</a></p><h2>' . esc_html( $d['label'] . ': ' . sprintf( _n( '%d site with its own value', '%d sites with their own value', $count, 'brand-fleet' ), $count ) ) . '</h2>';
+		echo '<table class="widefat striped"><thead><tr><th scope="col">Site</th><th scope="col">Its own value</th><th scope="col">Shared value it would use</th></tr></thead><tbody>';
+		foreach ( array_slice( $ids, 0, 25 ) as $id ) {
+			$own = (string) ( Fleet::profile( $id )['values'][ $key ] ?? '' );
+			$shared = 'imported' === $d['scope'] ? null : self::shared_value( $id, $key );
+			echo '<tr><td><a href="' . esc_url( self::url( array( 'site_id' => $id ) ) ) . '">' . esc_html( Site_Picker::label( $id ) ) . '</a></td><td>' . self::preview( $d['type'], $own, $d ) . ( null !== $shared && $shared === $own ? ' <span class="brand-fleet-tag">Same as shared</span>' : '' ) . '</td><td>' . ( null === $shared ? '<span class="description">—</span>' : self::preview( $d['type'], $shared, $d ) ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- preview() escapes its output.
+		}
+		echo '</tbody></table><p>';
+		if ( $page > 1 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'overrides', 'key' => $key, 'paged' => $page - 1 ) ) ) . '">Previous</a> '; }
+		if ( count( $ids ) > 25 ) { echo '<a class="button" href="' . esc_url( self::url( array( 'tab' => 'overrides', 'key' => $key, 'paged' => $page + 1 ) ) ) . '">Next</a>'; }
+		echo '</p>';
+		if ( 'location' === $d['scope'] && Fleet::can( 'bulk' ) ) {
+			self::begin( 'reset-overrides' );
+			echo '<input type="hidden" name="key" value="' . esc_attr( $key ) . '"><p>Put all of these sites back on the shared value. You see a preview first, and the change can be undone from Activity.</p>'; submit_button( sprintf( 'Preview reset of %d sites', $count ), 'secondary' ); echo '</form>';
+		}
+	}
+	/** The value a site would show without its own: its main data site, a segment default or the network default. */
+	private static function shared_value( int $site, string $key ): string {
+		$p = Fleet::profile( $site ); unset( $p['values'][ $key ] );
+		$source = (int) ( $p['source_id'] ?? 0 );
+		if ( $source && array_key_exists( $key, Fleet::profile( $source )['values'] ?? array() ) ) { return (string) Fleet::profile( $source )['values'][ $key ]; }
+		$d = Fleet::definitions()[ $key ];
+		foreach ( array_keys( Fleet_Segments::all() ) as $slug ) { if ( array_key_exists( $slug, (array) ( $d['segment_defaults'] ?? array() ) ) && Fleet_Segments::matches( $site, $slug ) ) { return (string) $d['segment_defaults'][ $slug ]; } }
+		return (string) $d['default'];
+	}
+	/** Local SEO: map variables to schema.org LocalBusiness fields, with a live preview for one site. */
+	private function seo(): void {
+		if ( isset( $_GET['saved'] ) ) { echo '<div class="notice notice-success"><p>Saved.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+		$settings = Fleet_Schema::settings(); $defs = Fleet::definitions();
+		echo '<h2>Local SEO</h2><p class="brand-fleet-intro">Tell search engines about each location: its name, address, phone, opening hours and holiday closures. Every site in the fleet gets its own business details (schema.org <code>LocalBusiness</code>) from its own variables, which helps it show up in local and map results. Nothing is added for visitors to download.</p>';
+		self::begin( 'local-seo' );
+		echo '<div class="brand-fleet-definition-form"><p><label><input type="checkbox" name="enabled" value="1"' . checked( ! empty( $settings['enabled'] ), true, false ) . '> <strong>Add business details to fleet sites</strong></label><br><span class="description">Turn this off if another plugin already adds local business details, so search engines do not see them twice.</span></p>';
+		self::select( 'type', 'Kind of business', Fleet_Schema::TYPES, (string) $settings['type'] );
+		echo '<fieldset class="brand-fleet-choices"><legend>Where</legend><label><input type="radio" name="where" value="home"' . checked( 'home', $settings['where'], false ) . '> Home page only (recommended)</label><label><input type="radio" name="where" value="all"' . checked( 'all', $settings['where'], false ) . '> Every page</label></fieldset>';
+		echo '<h3>Which variable holds each detail?</h3><table class="form-table"><tbody>';
+		foreach ( Fleet_Schema::FIELDS as $field => $spec ) {
+			$options = array( '' => '— Not used —' );
+			foreach ( $defs as $key => $d ) { if ( in_array( $d['type'], $spec[1], true ) ) { $options[ $key ] = $d['label'] . ' ({{' . $key . '}})'; } }
+			echo '<tr><th scope="row"><label for="brand-fleet-seo-' . esc_attr( $field ) . '">' . esc_html( $spec[0] ) . '</label></th><td><select id="brand-fleet-seo-' . esc_attr( $field ) . '" name="map[' . esc_attr( $field ) . ']">';
+			foreach ( $options as $key => $label ) { echo '<option value="' . esc_attr( (string) $key ) . '"' . selected( (string) $key, (string) ( $settings['map'][ $field ] ?? '' ), false ) . '>' . esc_html( $label ) . '</option>'; }
+			echo '</select>' . ( 'hours' === $field && count( $options ) < 2 ? ' <span class="description">Add an Opening hours variable under Variables to include hours.</span>' : '' ) . ( 'street' === $field ? ' <span class="description">A one-field address works too: choose it here and leave the rest empty.</span>' : '' ) . '</td></tr>';
+		}
+		$links = array_filter( $defs, static fn( $d ) => 'url' === $d['type'] );
+		if ( $links ) {
+			echo '<tr><th scope="row">Social profiles</th><td><fieldset><legend class="screen-reader-text">Social profiles</legend>';
+			foreach ( $links as $key => $d ) { echo '<label class="brand-fleet-inline"><input type="checkbox" name="same_as[]" value="' . esc_attr( $key ) . '"' . checked( in_array( $key, (array) $settings['same_as'], true ), true, false ) . '> ' . esc_html( $d['label'] ) . '</label> '; }
+			echo '</fieldset></td></tr>';
+		}
+		echo '</tbody></table>'; submit_button( 'Save local SEO' ); echo '</div></form>';
+		$preview = isset( $_GET['preview_site'] ) ? absint( $_GET['preview_site'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only preview.
+		echo '<h3>Preview for one site</h3><form method="get" class="brand-fleet-search-form"><input type="hidden" name="page" value="brand-fleet"><input type="hidden" name="tab" value="seo">';
+		Site_Picker::render( 'preview_site', 'Site', array( $preview ), false );
+		echo '<button class="button">Show preview</button></form>';
+		if ( $preview && Fleet::site( $preview ) ) {
+			$data = Fleet_Schema::data( $preview, array( 'enabled' => true ) + $settings );
+			if ( ! $data ) { echo '<p>' . esc_html( Fleet::profile( $preview ) ? 'This site has no business name yet, so nothing would be added.' : 'This site is not in the fleet yet.' ) . '</p>'; }
+			else { echo '<pre class="brand-fleet-json">' . esc_html( (string) wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) ) . '</pre><p><a href="' . esc_url( 'https://search.google.com/test/rich-results?url=' . rawurlencode( get_home_url( $preview ) ) ) . '" target="_blank" rel="noopener">Test this site with Google\'s Rich Results Test</a> (works once the site is public).</p>'; }
+		}
+	}
 	/** Fleet capabilities per main-site role, so central editors can work without being super admins. */
 	private function access(): void {
 		if ( isset( $_GET['saved'] ) ) { echo '<div class="notice notice-success"><p>Saved.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
@@ -461,6 +673,12 @@ class Fleet_Admin {
 			echo '</tr>';
 		}
 		echo '</tbody></table>'; submit_button( 'Save access' ); echo '</form>';
+		$alerts = Fleet_Alerts::settings();
+		echo '<h2 id="alerts">Email alerts</h2><p class="brand-fleet-intro">Get an email when something needs a person. Each alert is sent at most once an hour.</p>';
+		self::begin( 'alerts' );
+		echo '<p><label>Send alerts to (up to 10 addresses, separated by commas)<br><input class="large-text" type="text" name="emails" value="' . esc_attr( implode( ', ', (array) $alerts['emails'] ) ) . '"></label></p><fieldset class="brand-fleet-choices"><legend>Email when</legend>';
+		foreach ( Fleet_Alerts::EVENTS as $event => $label ) { echo '<label><input type="checkbox" name="events[]" value="' . esc_attr( $event ) . '"' . checked( in_array( $event, (array) $alerts['events'], true ), true, false ) . '> ' . esc_html( $label ) . '</label>'; }
+		echo '</fieldset><p class="description">The person who started a batch or set up the daily import is always included for their own alerts.</p>'; submit_button( 'Save email alerts', 'secondary' ); echo '</form>';
 	}
 	private static function main_roles(): array {
 		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Roles live per site; read the main site's, restored right after.
@@ -483,12 +701,15 @@ class Fleet_Admin {
 		if ( $id && Fleet::site( $id ) ) {
 			$p = Fleet::profile( $id );
 			echo '<p><a href="' . esc_url( self::url() ) . '">← All sites</a></p><h2>' . esc_html( Site_Picker::label( $id ) ) . '</h2>';
+			if ( isset( $_GET['restored'] ) ) { echo '<div class="notice notice-success inline"><p>Value restored.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
+			if ( isset( $_GET['restored'] ) ) { echo '<div class="notice notice-success inline"><p>Value restored.</p></div>'; } // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only notice.
 			if ( ! $p ) { echo '<div class="notice notice-info inline"><p>This site is not in the fleet yet. Saving enrolls it: it starts using the shared values below.</p></div>'; }
 			self::begin( 'site' );
 			echo '<input type="hidden" name="site_id" value="' . esc_attr( (string) $id ) . '"><input type="hidden" name="connections" value="1"><details class="brand-fleet-panel"' . ( $p ? '' : ' open' ) . '><summary>Connections</summary><p class="description">A main data site lets this site reuse another site\'s values. A brand hub groups sites for bulk updates.</p>';
 			foreach ( array( 'group_id' => 'Brand hub', 'source_id' => 'Main data site (inherit values from)', 'template_id' => 'Starting template (for reference)' ) as $field => $label ) { Site_Picker::render( $field, $label, array( $p[ $field ] ?? 0 ), false, 'source_id' === $field ? 'Network defaults' : 'None', 'source_id' === $field ? $id : 0 ); }
 			echo '</details>';
-			self::values( $id ); submit_button( $p ? 'Save site' : 'Add to fleet and save' ); echo '</form>'; return;
+			self::values( $id ); submit_button( $p ? 'Save site' : 'Add to fleet and save' ); echo '</form>';
+			self::history( $id ); return;
 		}
 		$q = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$page = max( 1, isset( $_GET['paged'] ) ? absint( $_GET['paged'] ) : 1 ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -530,6 +751,7 @@ class Fleet_Admin {
 		if ( ! empty( $j['error'] ) ) { echo '<div class="notice notice-error inline"><p>' . esc_html( $j['error'] ) . '</p></div>'; }
 		if ( in_array( $j['phase'], array( 'preview', 'apply' ), true ) ) { echo '<p class="description">This keeps running in the background. You can close this page and come back.</p>'; }
 		wp_enqueue_script( 'brand-fleet-batch', BRAND_FLEET_URL . 'assets/fleet-batch.js', array(), BRAND_FLEET_VERSION, true );
+		if ( in_array( $j['phase'], array( 'complete', 'cancelled', 'stopped' ), true ) ) { self::undo_button( $j['id'] ); }
 		if ( in_array( $j['phase'], array( 'preview', 'ready', 'apply' ), true ) ) {
 			echo '<p class="brand-fleet-actions">';
 			if ( 'ready' === $j['phase'] ) { echo '<button type="button" class="button button-primary" id="brand-fleet-batch-run">' . esc_html( $apply_label ) . '</button> '; }
@@ -545,7 +767,7 @@ class Fleet_Admin {
 		$mine = ( $j['kind'] ?? 'bulk' ) === $kind;
 		if ( $batch === $j['id'] && $mine ) { return $j; }
 		$running = in_array( $j['phase'], array( 'preview', 'ready', 'apply' ), true );
-		$kinds = array( 'bulk' => array( 'bulk', 'bulk update' ), 'replace' => array( 'replace', 'find and replace' ), 'report' => array( 'tokens', 'token check' ), 'import' => array( 'import', 'import' ) );
+		$kinds = array( 'bulk' => array( 'bulk', 'bulk update' ), 'replace' => array( 'replace', 'find and replace' ), 'report' => array( 'tokens', 'token check' ), 'import' => array( 'import', 'import' ), 'undo' => array( 'audit', 'undo' ), 'revert' => array( 'audit', 'undo' ) );
 		list( $where, $name ) = $kinds[ $j['kind'] ?? 'bulk' ] ?? $kinds['bulk'];
 		if ( $mine ) { $where = $tab; }
 		echo '<p class="brand-fleet-note">' . esc_html( $running ? 'You have a ' . $name . ' in progress. ' : 'Your last ' . $name . ' is available. ' ) . '<a href="' . esc_url( self::url( array( 'tab' => $where, 'batch' => $j['id'] ) ) ) . '">' . esc_html( $running ? 'Open it' : 'View results' ) . '</a></p>';
@@ -646,14 +868,22 @@ class Fleet_Admin {
 		try {
 			$in = wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Each typed field validated by services below; nonce checked above.
 			$task = sanitize_key( $in['task'] ?? '' );
-			if ( 'site' === $task ) {
+			if ( 'request' === $task ) {
+				$id = absint( $in['site_id'] ?? 0 );
+				Fleet_Requests::submit( $id, sanitize_key( $in['key'] ?? '' ), (string) ( $in['value'] ?? '' ), (string) ( $in['note'] ?? '' ) );
+				$url = admin_url( 'options-general.php?page=brand-fleet-settings&requested=1#request' );
+			} elseif ( 'restore' === $task ) {
+				$id = absint( $in['site_id'] ?? 0 );
+				Fleet_History::restore( $id, absint( $in['index'] ?? 0 ), (string) ( $in['entry'] ?? '' ) );
+				$url = Fleet::can( 'values' ) ? self::url( array( 'site_id' => $id, 'restored' => 1 ) ) : admin_url( 'options-general.php?page=brand-fleet-settings&restored=1' );
+			} elseif ( 'site' === $task ) {
 				$id = absint( $in['site_id'] ?? 0 ); $patch = array();
 				foreach ( Fleet::definitions() as $key => $d ) { if ( 'location' === $d['scope'] && ( Fleet::can( 'values' ) || Fleet::editable( $d, $id ) ) ) { $patch[ $key ] = isset( $in['override'][ $key ] ) ? ( $in['values'][ $key ] ?? '' ) : null; } }
 				$connections = isset( $in['connections'] ) ? array_intersect_key( $in, array_flip( array( 'group_id', 'source_id', 'template_id' ) ) ) : null;
 				Fleet::save_profile( $id, $patch, $connections, (string) ( $in['expected'] ?? '' ) );
 				$url = Fleet::can( 'values' ) ? self::url( array( 'site_id' => $id ) ) : admin_url( 'options-general.php?page=brand-fleet-settings' );
 			} else {
-				$needs = array( 'definition' => 'manage', 'meta-keys' => 'manage', 'import-apply' => 'manage', 'segments' => 'manage', 'replace' => 'bulk', 'bulk' => 'bulk', 'import' => 'bulk', 'import-settings' => 'bulk', 'tokens' => 'bulk', 'access' => 'network' );
+				$needs = array( 'definition' => 'manage', 'meta-keys' => 'manage', 'closures' => 'manage', 'local-seo' => 'manage', 'reset-overrides' => 'bulk', 'undo' => 'bulk', 'decide' => 'values', 'alerts' => 'network', 'import-apply' => 'manage', 'segments' => 'manage', 'replace' => 'bulk', 'bulk' => 'bulk', 'import' => 'bulk', 'import-settings' => 'bulk', 'tokens' => 'bulk', 'access' => 'network' );
 				if ( ! self::allowed( $needs[ $task ] ?? 'network' ) ) { throw new \RuntimeException( 'You do not have permission for this fleet action.' ); }
 				if ( 'definition' === $task ) {
 					if ( ( $in['schema_hash'] ?? '' ) !== Fleet::hash( Fleet::definitions() ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
@@ -676,6 +906,20 @@ class Fleet_Admin {
 					$url = Fleet_Import::handle( $task, $in ); $url = self::url( array( 'tab' => 'import' ) + $url );
 				} elseif ( 'tokens' === $task ) {
 					$job = Fleet_Jobs::start_report( self::target_ids( $in ), array( 'types' => (array) ( $in['types'] ?? array() ) ) ); $url = self::url( array( 'tab' => 'tokens', 'batch' => $job['id'] ) );
+				} elseif ( 'undo' === $task ) {
+					$job = Fleet_Undo::start( sanitize_text_field( (string) ( $in['batch'] ?? '' ) ) ); $url = self::url( array( 'tab' => 'audit', 'batch' => $job['id'] ) );
+				} elseif ( 'decide' === $task ) {
+					$r = Fleet_Requests::decide( sanitize_text_field( (string) ( $in['request'] ?? '' ) ), 'approve' === ( $in['decision'] ?? '' ), (string) ( $in['reason'] ?? '' ) ); $url = self::url( array( 'tab' => 'requests', 'decided' => $r['status'] ) );
+				} elseif ( 'alerts' === $task ) {
+					Fleet_Alerts::save( (string) ( $in['emails'] ?? '' ), (array) ( $in['events'] ?? array() ) ); $url = self::url( array( 'tab' => 'access', 'saved' => 1 ) ) . '#alerts';
+				} elseif ( 'reset-overrides' === $task ) {
+					$key = sanitize_key( $in['key'] ?? '' );
+					if ( 'location' !== ( Fleet::definitions()[ $key ]['scope'] ?? '' ) ) { throw new \InvalidArgumentException( 'Choose a variable sites can set.' ); }
+					$job = Fleet_Jobs::start( Fleet_Overrides::sites( $key ), array( $key => null ) ); $url = self::url( array( 'tab' => 'bulk', 'batch' => $job['id'] ) );
+				} elseif ( 'local-seo' === $task ) {
+					Fleet_Schema::save( $in ); $url = self::url( array( 'tab' => 'seo', 'saved' => 1 ) );
+				} elseif ( 'closures' === $task ) {
+					Fleet_Hours::save_closures( (array) ( $in['closures'] ?? array() ) ); $url = self::url( array( 'tab' => 'definitions', 'saved' => 1, 'closures' => 1 ) );
 				} elseif ( 'meta-keys' === $task ) {
 					Fleet::save_meta_keys( (string) ( $in['meta_keys'] ?? '' ) ); $url = self::url( array( 'tab' => 'definitions', 'saved' => 1 ) );
 				} elseif ( 'import-apply' === $task ) {
@@ -706,6 +950,14 @@ class Fleet_Admin {
 			$j = Fleet_Jobs::exclude( sanitize_text_field( wp_unslash( $_POST['id'] ?? '' ) ), absint( $_POST['row'] ?? 0 ), absint( $_POST['post'] ?? 0 ), ! empty( $_POST['excluded'] ) );
 			wp_send_json_success( array( 'excluded' => count( $j['left_out'] ?? array() ) ) );
 		} catch ( \Throwable $e ) { wp_send_json_error( $e->getMessage(), 400 ); }
+	}
+	public function export_values(): void {
+		check_admin_referer( 'brand_fleet_export_values' );
+		if ( ! Fleet::can( 'bulk' ) && ! Fleet::can( 'values' ) ) { wp_die( esc_html__( 'Fleet permission required.', 'brand-fleet' ), 'Brand Fleet', array( 'response' => 403 ) ); }
+		$segment = sanitize_key( wp_unslash( $_GET['segment'] ?? '' ) );
+		$mode = 'shown' === sanitize_key( wp_unslash( $_GET['mode'] ?? '' ) ) ? 'shown' : 'own';
+		Fleet_Export::download( self::target_ids( '' === $segment ? array( 'scope' => 'all' ) : array( 'scope' => 'segment', 'segment' => $segment ) ), $mode );
+		exit;
 	}
 	public function export(): void {
 		check_admin_referer( 'brand_fleet_export' );

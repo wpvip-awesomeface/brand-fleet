@@ -1,0 +1,28 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "brand-fleet/hours",
+	"version": "1.0.0",
+	"title": "Opening Hours",
+	"category": "brand-fleet",
+	"icon": "clock",
+	"description": "This site's opening hours from an Opening hours variable, with today highlighted, an open-now line, and upcoming holiday closures.",
+	"keywords": [ "hours", "open", "schedule", "closed", "holiday" ],
+	"textdomain": "brand-fleet",
+	"editorScript": "brand-fleet-hours-editor",
+	"viewScript": "brand-fleet-hours-view",
+	"style": "brand-fleet-hours-style",
+	"render": "file:./render.php",
+	"attributes": {
+		"variable": { "type": "string", "default": "" },
+		"showStatus": { "type": "boolean", "default": true },
+		"showSpecial": { "type": "boolean", "default": true }
+	},
+	"supports": {
+		"html": false,
+		"align": [ "wide", "full" ],
+		"color": { "text": true, "background": true },
+		"spacing": { "padding": true, "margin": true },
+		"typography": { "fontSize": true }
+	}
+}

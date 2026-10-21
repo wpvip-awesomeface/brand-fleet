@@ -14,7 +14,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Settings {
-
 	const PREFIX = 'brand_fleet_';
 
 	const GROUP = 'brand_fleet_settings';
@@ -43,6 +42,7 @@ class Settings {
 
 	const DEFAULT_ACCENT = '#3858e9';
 
+	/** Default Brand Identity settings. */
 	public static function defaults(): array {
 		$defaults = array(
 			self::OPT_BUSINESS_NAME   => '',
@@ -68,9 +68,12 @@ class Settings {
 		return array_keys( self::defaults() );
 	}
 
+	/** One Brand Identity setting for the current site. */
 	public static function get( string $key ): string {
 		if ( Fleet::profile( get_current_blog_id() ) ) {
-			if ( self::OPT_MASTER_SITE === $key ) { return (string) ( Fleet::profile( get_current_blog_id() )['source_id'] ?? 0 ); }
+			if ( self::OPT_MASTER_SITE === $key ) {
+				return (string) ( Fleet::profile( get_current_blog_id() )['source_id'] ?? 0 );
+			}
 			return Fleet::resolved( get_current_blog_id(), substr( $key, strlen( self::PREFIX ) ) )['value'];
 		}
 		$defaults = self::defaults();
@@ -81,17 +84,22 @@ class Settings {
 	/** Display name for the current brand; falls back to the site title. */
 	public static function business_name(): string {
 		$name = trim( self::get( self::OPT_BUSINESS_NAME ) );
-		if ( Fleet::profile( get_current_blog_id() ) ) { return $name; }
+		if ( Fleet::profile( get_current_blog_id() ) ) {
+			return $name;
+		}
 		return '' !== $name ? $name : get_bloginfo( 'name' );
 	}
 
 	/** Legal entity name; falls back to the business name. */
 	public static function legal_name(): string {
 		$name = trim( self::get( self::OPT_LEGAL_NAME ) );
-		if ( Fleet::profile( get_current_blog_id() ) ) { return $name; }
+		if ( Fleet::profile( get_current_blog_id() ) ) {
+			return $name;
+		}
 		return '' !== $name ? $name : self::business_name();
 	}
 
+	/** The current site's accent color. */
 	public static function accent(): string {
 		$accent = sanitize_hex_color( self::get( self::OPT_ACCENT ) );
 		return $accent ? $accent : self::DEFAULT_ACCENT;
@@ -104,7 +112,9 @@ class Settings {
 	 */
 	public static function parent_logo_url(): string {
 		$url = trim( self::get( self::OPT_PARENT_LOGO_URL ) );
-		if ( Fleet::profile( get_current_blog_id() ) ) { return $url; }
+		if ( Fleet::profile( get_current_blog_id() ) ) {
+			return $url;
+		}
 		if ( '' !== $url ) {
 			return $url;
 		}
@@ -147,7 +157,9 @@ class Settings {
 		// A "content_master" variable (a site ID) picks the master per segment, e.g. the French master for French sites.
 		if ( isset( Fleet::definitions()['content_master'] ) && Fleet::profile( get_current_blog_id() ) ) {
 			$id = absint( Fleet::resolved( get_current_blog_id(), 'content_master' )['value'] );
-			if ( $id && Fleet::site( $id ) ) { return $id; }
+			if ( $id && Fleet::site( $id ) ) {
+				return $id;
+			}
 		}
 		$raw = trim( self::get( self::OPT_MASTER_SITE ) );
 		if ( '' === $raw ) {
@@ -195,8 +207,12 @@ class Settings {
 
 	/** Token maps per site for this request; Fleet::flush() clears them after any fleet write. */
 	private static array $tokens = array();
-	public static function flush(): void { self::$tokens = array(); }
+	/** Clears the in-request settings cache. */
+	public static function flush(): void {
+		self::$tokens = array();
+	}
 
+	/** The {{token}} => value map for the current site. */
 	public static function tokens(): array {
 		$site = get_current_blog_id();
 		/**
@@ -205,13 +221,15 @@ class Settings {
 		 * @param array<string, string> $tokens Keys include the braces, e.g. '{{business_name}}'.
 		 * @param int                   $site   Blog ID being rendered.
 		 */
-		if ( ! isset( self::$tokens[ $site ] ) ) { self::$tokens[ $site ] = (array) apply_filters( 'brand_fleet_tokens', self::build_tokens(), $site ); }
+		if ( ! isset( self::$tokens[ $site ] ) ) {
+			self::$tokens[ $site ] = (array) apply_filters( 'brand_fleet_tokens', self::build_tokens(), $site );
+		}
 		return self::$tokens[ $site ];
 	}
 	private static function build_tokens(): array {
 		$address = trim( self::get( self::OPT_ADDRESS ) );
 		$address = preg_replace( '/\s*\R\s*/', ', ', $address );
-		$tokens = array(
+		$tokens  = array(
 			'{{business_name}}' => self::business_name(),
 			'{{legal_name}}'    => self::legal_name(),
 			'{{phone_sales}}'   => trim( self::get( self::OPT_PHONE_SALES ) ),
@@ -222,19 +240,41 @@ class Settings {
 			foreach ( Fleet::definitions() as $key => $definition ) {
 				$token = '{{' . $key . '}}';
 				// Embeds print through Fleet_Embeds only, never as content tokens.
-				if ( 'embed' === $definition['type'] ) { continue; }
-				if ( ! isset( $tokens[ $token ] ) ) { $tokens[ $token ] = Fleet::display( $definition, (string) Fleet::resolved( get_current_blog_id(), $key )['value'] ); }
+				if ( 'embed' === $definition['type'] ) {
+					continue;
+				}
+				if ( ! isset( $tokens[ $token ] ) ) {
+					$tokens[ $token ] = Fleet::display(
+						$definition,
+						(string) Fleet::resolved( get_current_blog_id(), $key )['value']
+					);
+				}
 			}
 		}
 		return $tokens;
 	}
 
+	/** Hooks settings registration. */
 	public function init(): void {
 		add_action( 'admin_init', array( $this, 'register' ) );
 		// Writes made outside the plugin's own save paths still reach this request's caches.
-		foreach ( array( 'update_option_' . Fleet::PROFILE, 'add_option_' . Fleet::PROFILE, 'delete_option_' . Fleet::PROFILE, 'update_site_option_' . Fleet::SCHEMA, 'add_site_option_' . Fleet::SCHEMA, 'update_site_option_' . Fleet_Segments::OPTION, 'add_site_option_' . Fleet_Segments::OPTION ) as $hook ) { add_action( $hook, array( Fleet::class, 'flush' ) ); }
+		foreach (
+			array(
+				'update_option_' . Fleet::PROFILE,
+				'add_option_' . Fleet::PROFILE,
+				'delete_option_' . Fleet::PROFILE,
+				'update_site_option_' . Fleet::SCHEMA,
+				'add_site_option_' . Fleet::SCHEMA,
+				'update_site_option_' . Fleet_Segments::OPTION,
+				'add_site_option_' . Fleet_Segments::OPTION,
+			)
+			as $hook
+		) {
+			add_action( $hook, array( Fleet::class, 'flush' ) );
+		}
 	}
 
+	/** Registers the Brand Identity settings. */
 	public function register(): void {
 		$text = array(
 			'type'              => 'string',

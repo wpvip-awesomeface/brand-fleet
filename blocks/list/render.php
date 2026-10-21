@@ -12,7 +12,11 @@ $brand_fleet_items = '' === $brand_fleet_key ? array() : Fleet::items( Blocks::v
 
 if ( ! $brand_fleet_items ) {
 	if ( current_user_can( 'edit_posts' ) ) {
-		printf( '<div %s><em>%s</em></div>', get_block_wrapper_attributes( array( 'class' => 'brand-fleet-list brand-fleet-list--empty' ) ), esc_html__( 'Variable List: nothing to show yet. Add a List variable under Brand Fleet → Variables, then fill it in for this site.', 'brand-fleet' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Wrapper attributes are pre-escaped by core.
+		printf(
+			'<div %s><em>%s</em></div>',
+			get_block_wrapper_attributes( array( 'class' => 'brand-fleet-list brand-fleet-list--empty' ) ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Wrapper attributes are pre-escaped by core.
+			esc_html__( 'Variable List: nothing to show yet. Add a List variable under Brand Fleet → Variables, then fill it in for this site.', 'brand-fleet' )
+		);
 	}
 	return;
 }

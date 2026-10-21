@@ -5,7 +5,16 @@ namespace BrandFleet;
 defined( 'ABSPATH' ) || exit;
 
 $brand_fleet_links = array();
-foreach ( array( 'about' => 'Our company', 'our-approach' => 'Our approach', 'our-location' => 'Our location', 'contact' => 'Contact', 'privacy' => 'Privacy', 'accessibility' => 'Accessibility', 'terms' => 'Terms' ) as $brand_fleet_slug => $brand_fleet_label ) {
+$brand_fleet_pages = array(
+	'about'         => 'Our company',
+	'our-approach'  => 'Our approach',
+	'our-location'  => 'Our location',
+	'contact'       => 'Contact',
+	'privacy'       => 'Privacy',
+	'accessibility' => 'Accessibility',
+	'terms'         => 'Terms',
+);
+foreach ( $brand_fleet_pages as $brand_fleet_slug => $brand_fleet_label ) {
 	$brand_fleet_page = get_page_by_path( $brand_fleet_slug );
 	if ( $brand_fleet_page && 'publish' === $brand_fleet_page->post_status ) {
 		$brand_fleet_links[ $brand_fleet_label ] = get_permalink( $brand_fleet_page );

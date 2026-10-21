@@ -11,7 +11,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Plugin {
-
 	private static ?Plugin $instance = null;
 
 	public Settings $settings;
@@ -19,6 +18,7 @@ class Plugin {
 	public Content $content;
 	public Blocks $blocks;
 
+	/** The plugin singleton. */
 	public static function get_instance(): Plugin {
 		if ( null === self::$instance ) {
 			self::$instance = new self();
@@ -42,7 +42,8 @@ class Plugin {
 		// Locks must be shared by every site in the network.
 		wp_cache_add_global_groups( array( 'brand_fleet_locks' ) );
 		// Background batches and cache purges run on VIP Cron Control: one tick at a time, every minute while there is work.
-		add_filter( 'cron_schedules', array( Fleet_Jobs::class, 'schedules' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- One-minute interval, only scheduled while a batch or purge is pending; unschedules itself when idle.
+		// phpcs:ignore WordPress.WP.CronInterval.ChangeDetected -- One-minute interval, only scheduled while a batch or purge is pending; unschedules itself when idle.
+		add_filter( 'cron_schedules', array( Fleet_Jobs::class, 'schedules' ) );
 		add_action( Fleet_Jobs::HOOK, array( Fleet_Jobs::class, 'tick' ) );
 		add_action( 'brand_fleet_purge', array( Fleet_Cache::class, 'run' ), 10, 2 );
 		$this->settings->init();

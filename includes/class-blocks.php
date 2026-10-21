@@ -12,9 +12,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class Blocks {
-
 	private const BLOCKS = array( 'brand-header', 'brand-footer', 'shared-content', 'hours', 'list' );
 
+	/** Hooks block registration, the block category and editor data. */
 	public function init(): void {
 		add_action( 'init', array( $this, 'register' ) );
 		add_filter( 'block_categories_all', array( $this, 'category' ) );
@@ -24,8 +24,14 @@ class Blocks {
 	/** The variable a block shows: the chosen key when it has the right type, else the first variable of that type. */
 	public static function variable( string $key, string $type ): string {
 		$defs = Fleet::definitions();
-		if ( isset( $defs[ $key ] ) && $type === $defs[ $key ]['type'] ) { return $key; }
-		foreach ( $defs as $candidate => $d ) { if ( $type === $d['type'] ) { return (string) $candidate; } }
+		if ( isset( $defs[ $key ] ) && $type === $defs[ $key ]['type'] ) {
+			return $key;
+		}
+		foreach ( $defs as $candidate => $d ) {
+			if ( $type === $d['type'] ) {
+				return (string) $candidate;
+			}
+		}
 		return '';
 	}
 	/** This site's raw value for a variable; sites outside the fleet have none. */
@@ -35,11 +41,28 @@ class Blocks {
 	}
 	/** Hours and List variables for the block inspectors. */
 	public function editor_data(): void {
-		$data = array( 'hours' => array(), 'list' => array() );
-		foreach ( Fleet::definitions() as $key => $d ) { if ( isset( $data[ $d['type'] ] ) ) { $data[ $d['type'] ][] = array( 'key' => $key, 'label' => $d['label'] ); } }
-		foreach ( array( 'hours', 'list' ) as $block ) { wp_add_inline_script( "brand-fleet-{$block}-editor", 'window.brandFleetBlocks = ' . wp_json_encode( $data ) . ';', 'before' ); }
+		$data = array(
+			'hours' => array(),
+			'list'  => array(),
+		);
+		foreach ( Fleet::definitions() as $key => $d ) {
+			if ( isset( $data[ $d['type'] ] ) ) {
+				$data[ $d['type'] ][] = array(
+					'key'   => $key,
+					'label' => $d['label'],
+				);
+			}
+		}
+		foreach ( array( 'hours', 'list' ) as $block ) {
+			wp_add_inline_script(
+				"brand-fleet-{$block}-editor",
+				'window.brandFleetBlocks = ' . wp_json_encode( $data ) . ';',
+				'before'
+			);
+		}
 	}
 
+	/** Adds the Brand Fleet block category to the inserter. */
 	public function category( array $categories ): array {
 		$categories[] = array(
 			'slug'  => 'brand-fleet',
@@ -49,8 +72,16 @@ class Blocks {
 		return $categories;
 	}
 
+	/** Registers the plugin's blocks and their editor scripts. */
 	public function register(): void {
-		$editor_deps = array( 'wp-blocks', 'wp-element', 'wp-block-editor', 'wp-components', 'wp-server-side-render', 'wp-i18n' );
+		$editor_deps = array(
+			'wp-blocks',
+			'wp-element',
+			'wp-block-editor',
+			'wp-components',
+			'wp-server-side-render',
+			'wp-i18n',
+		);
 
 		foreach ( self::BLOCKS as $block ) {
 			$dir = BRAND_FLEET_DIR . 'blocks/' . $block;
@@ -64,7 +95,16 @@ class Blocks {
 			);
 
 			if ( file_exists( $dir . '/view.js' ) ) {
-				wp_register_script( "brand-fleet-{$block}-view", BRAND_FLEET_URL . "blocks/{$block}/view.js", array(), BRAND_FLEET_VERSION, array( 'in_footer' => true, 'strategy' => 'defer' ) );
+				wp_register_script(
+					"brand-fleet-{$block}-view",
+					BRAND_FLEET_URL . "blocks/{$block}/view.js",
+					array(),
+					BRAND_FLEET_VERSION,
+					array(
+						'in_footer' => true,
+						'strategy'  => 'defer',
+					)
+				);
 			}
 
 			if ( file_exists( $dir . '/style.css' ) ) {

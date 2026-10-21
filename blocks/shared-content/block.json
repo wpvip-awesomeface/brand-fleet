@@ -6,7 +6,7 @@
 	"title": "Shared Content (from master site)",
 	"category": "brand-fleet",
 	"icon": "controls-repeat",
-	"description": "Renders a page from the master brand site with this site's {{token}} values swapped in. Leave the slug empty to pull the master's front page.",
+	"description": "Renders a page or synced pattern from the master brand site with this site's {{token}} values swapped in. A slug like privacy-{{province}} picks the regional version and falls back to privacy. Leave the slug empty to pull the master's front page.",
 	"keywords": [ "shared", "master", "sync", "brand" ],
 	"textdomain": "brand-fleet",
 	"editorScript": "brand-fleet-shared-content-editor",
@@ -15,6 +15,11 @@
 		"slug": {
 			"type": "string",
 			"default": ""
+		},
+		"kind": {
+			"type": "string",
+			"enum": [ "page", "pattern" ],
+			"default": "page"
 		}
 	},
 	"supports": {

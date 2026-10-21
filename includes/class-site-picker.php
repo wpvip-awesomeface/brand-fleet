@@ -21,7 +21,7 @@ class Site_Picker {
 	}
 	public static function search(): void {
 		check_ajax_referer( 'brand_fleet_site_picker', 'nonce' );
-		if ( ! Fleet::network_admin() ) { wp_send_json_error( 'Network permission required.', 403 ); }
+		if ( ! Fleet::can_any() ) { wp_send_json_error( 'Network permission required.', 403 ); }
 		$offset = min( 1000000, absint( $_POST['offset'] ?? 0 ) );
 		// Page through sites, not an unbounded cross-site option query. Names use cached options.
 		$sites = get_sites( array( 'network_id' => get_current_network_id(), 'number' => 26, 'offset' => $offset, 'orderby' => 'id', 'order' => 'ASC', 'deleted' => 0, 'archived' => 0, 'spam' => 0 ) );

@@ -27,6 +27,7 @@ class Fleet_Embeds {
 		foreach ( Fleet::definitions() as $key => $d ) {
 			if ( 'embed' !== $d['type'] || '' === trim( (string) $d['default'] ) || ( $d['placement'] ?? 'head' ) !== $placement ) { continue; }
 			if ( ! empty( $d['targets'] ) && ! in_array( $site, $d['targets'], true ) ) { continue; }
+			if ( ! empty( $d['segment'] ) && ! Fleet_Segments::matches( $site, $d['segment'] ) ) { continue; }
 			$tokens = $tokens ?? array_map( static fn( $value ) => preg_match( self::SAFE_VALUE, (string) $value ) ? (string) $value : '', Settings::tokens() );
 			$out .= "\n<!-- Brand Fleet embed: " . esc_html( $key ) . " -->\n" . strtr( (string) $d['default'], $tokens ) . "\n";
 		}

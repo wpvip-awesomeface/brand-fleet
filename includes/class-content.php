@@ -9,8 +9,9 @@
  * site's context so {{business_name}}, {{phone_sales}}, … resolve to the
  * spoke's own settings.
  *
- * Cache posture: the raw pulled markup is object-cached for 5 minutes per
- * (master, slug); rendered output varies only by site, never by visitor.
+ * Cache posture: the raw pulled markup is object-cached (global group) for 5 minutes
+ * per (master, kind, slug) and deleted when the master edits it; rendered output varies
+ * only by site, never by visitor.
  */
 
 namespace BrandFleet;
@@ -47,6 +48,9 @@ class Content {
 		add_filter( 'document_title_parts', array( $this, 'swap_title_parts' ), 20 );
 		add_filter( 'get_post_metadata', array( $this, 'swap_meta' ), 20, 4 );
 		add_action( 'init', array( $this, 'register_binding' ) );
+		wp_cache_add_global_groups( array( self::CACHE_GROUP ) );
+		add_action( 'transition_post_status', array( $this, 'post_status_changed' ), 10, 3 );
+		add_action( 'post_updated', array( $this, 'post_updated' ), 10, 3 );
 		add_action( 'enqueue_block_editor_assets', array( $this, 'editor_binding' ) );
 	}
 
@@ -153,32 +157,39 @@ class Content {
 		wp_localize_script( 'brand-fleet-bindings', 'brandFleetBindings', array( 'fields' => $fields ) );
 	}
 
+	/** Shared content kinds: a master page, or a master synced pattern (a "showcase": FAQ set, team list) with no URL of its own. */
+	const KINDS = array( 'page' => 'page', 'pattern' => 'wp_block' );
+
 	/**
-	 * Fetch the RAW content of a master-site page.
+	 * Fetch the RAW content of a master-site page or synced pattern.
 	 *
-	 * @param string $slug Page path on the master site; '' means its front page.
+	 * The cache group is global, so one copy serves every location and an edit on the
+	 * master can delete it (see master_changed()).
+	 *
+	 * @param string $slug Page path or pattern slug on the master site; '' means its front page.
 	 * @return string Raw block markup, or '' when unresolvable.
 	 */
-	public function pull_raw( string $slug ): string {
+	public function pull_raw( string $slug, string $kind = 'page' ): string {
 		$master = Settings::master_blog_id();
-		if ( 0 === $master || get_current_blog_id() === $master ) {
+		if ( 0 === $master || get_current_blog_id() === $master || ! isset( self::KINDS[ $kind ] ) ) {
 			return '';
 		}
 
-		$cache_key = 'pull_' . $master . '_' . md5( $slug );
+		$cache_key = self::cache_key( $master, $kind, $slug );
 		$cached    = wp_cache_get( $cache_key, self::CACHE_GROUP );
 		if ( is_string( $cached ) ) {
 			return $cached;
 		}
 
 		$raw = '';
+		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Read one post from the master; restored right after.
 		switch_to_blog( $master );
 		$post = null;
-		if ( '' === $slug ) {
+		if ( '' === $slug && 'page' === $kind ) {
 			$front_id = (int) get_option( 'page_on_front' );
 			$post     = $front_id ? get_post( $front_id ) : null;
-		} else {
-			$post = get_page_by_path( $slug, OBJECT, array( 'page' ) );
+		} elseif ( '' !== $slug ) {
+			$post = get_page_by_path( $slug, OBJECT, array( self::KINDS[ $kind ] ) );
 		}
 		if ( $post instanceof \WP_Post && 'publish' === $post->post_status ) {
 			$raw = (string) $post->post_content;
@@ -189,18 +200,43 @@ class Content {
 		return $raw;
 	}
 
+	private static function cache_key( int $master, string $kind, string $slug ): string {
+		return 'pull_' . $master . '_' . $kind . '_' . md5( $slug );
+	}
+
 	/**
-	 * Render a master-site page in the CURRENT site's context.
+	 * Slugs to try, most specific first. "privacy-{{province}}" tries "privacy-on" (this
+	 * site's province), then "privacy"; "{{language}}/privacy" tries "fr/privacy", then "privacy".
+	 */
+	public static function candidates( string $slug ): array {
+		if ( ! str_contains( $slug, '{{' ) ) { return array( $slug ); }
+		$values = array_map( static fn( $value ) => sanitize_title( (string) $value ), Settings::tokens() );
+		$specific = strtr( $slug, $values );
+		$generic = trim( (string) preg_replace( array( '/\{\{[a-z][a-z0-9_]{0,47}\}\}/', '#[-_]*/[-_/]*#', '/[-_]{2,}/' ), array( '', '/', '-' ), $slug ), "-_/ \t" );
+		$out = array();
+		// A token with no value (or an unknown token) leaves {{ behind or an empty piece: skip that candidate.
+		if ( ! str_contains( $specific, '{{' ) && ! preg_match( '#(^|/)[-_]*($|/)|[-_]$|^[-_]|[-_]{2,}#', $specific ) ) { $out[] = trim( $specific, '/' ); }
+		$out[] = $generic;
+		return array_values( array_unique( array_filter( $out, 'strlen' ) ) );
+	}
+
+	/**
+	 * Render a master-site page or pattern in the CURRENT site's context.
 	 *
 	 * Rendering happens after restore_current_blog() on purpose: blocks and
 	 * the token filter must resolve against the spoke site's options, not the
 	 * master's.
 	 */
-	public function render_shared( string $slug ): string {
+	public function render_shared( string $slug, string $kind = 'page' ): string {
 		if ( self::$depth >= 2 ) {
 			return '';
 		}
-		$raw = $this->pull_raw( $slug );
+		$raw = '';
+		foreach ( self::candidates( $slug ) as $candidate ) {
+			$raw = $this->pull_raw( $candidate, $kind );
+			if ( '' !== $raw ) { break; }
+		}
+		if ( '' === $raw && '' === $slug ) { $raw = $this->pull_raw( '', $kind ); }
 		if ( '' === $raw ) {
 			return '';
 		}
@@ -208,5 +244,23 @@ class Content {
 		$html = apply_filters( 'the_content', $raw );
 		--self::$depth;
 		return $html;
+	}
+
+	/** A master page or pattern changed: drop the shared copy and purge the locations that show it. */
+	public function post_status_changed( string $new, string $old, \WP_Post $post ): void {
+		if ( 'publish' === $new || 'publish' === $old ) { $this->master_changed( $post ); }
+	}
+	public function post_updated( int $id, \WP_Post $after, \WP_Post $before ): void {
+		// A renamed or moved page leaves its old path cached; the status hook covers the new one.
+		if ( $before->post_name !== $after->post_name || $before->post_parent !== $after->post_parent ) { $this->master_changed( $before, false ); }
+	}
+	private function master_changed( \WP_Post $post, bool $purge = true ): void {
+		$kind = array_search( $post->post_type, self::KINDS, true );
+		if ( false === $kind ) { return; }
+		$master = get_current_blog_id();
+		$slug = 'page' === $kind ? get_page_uri( $post ) : $post->post_name;
+		wp_cache_delete( self::cache_key( $master, (string) $kind, (string) $slug ), self::CACHE_GROUP );
+		if ( 'page' === $kind && (int) get_option( 'page_on_front' ) === $post->ID ) { wp_cache_delete( self::cache_key( $master, 'page', '' ), self::CACHE_GROUP ); }
+		if ( $purge ) { Fleet_Cache::consumers_of( $master ); }
 	}
 }

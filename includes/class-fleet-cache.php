@@ -35,12 +35,30 @@ class Fleet_Cache {
 		}, 30 );
 		Fleet_Jobs::wake();
 	}
+	/**
+	 * A master edited a shared page or pattern: purge only the pages on its locations that
+	 * show shared content, instead of every page on every location.
+	 */
+	public static function consumers_of( int $master ): void {
+		if ( ! function_exists( 'wpvip_purge_edge_cache_for_post' ) ) { return; }
+		// phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Exact relationship-key lookup uses the core blogmeta meta_key index; no meta_value comparison.
+		$ids = get_sites( array( 'network_id' => get_current_network_id(), 'number' => 10001, 'fields' => 'ids', 'deleted' => 0, 'archived' => 0, 'spam' => 0, 'meta_key' => 'brand_fleet_source_' . $master ) );
+		if ( isset( Fleet::definitions()['content_master'] ) ) { $ids = array_merge( $ids, Fleet_Segments::sites_with( 'content_master', (string) $master ) ); }
+		$ids = array_diff( array_unique( array_map( 'intval', $ids ) ), array( $master ) );
+		if ( ! $ids ) { return; }
+		Fleet::locked( 'purge', static function () use ( $ids ) {
+			$q = self::get();
+			foreach ( $ids as $id ) { $q['consumers'] += array( $id => 0 ); }
+			self::put( $q );
+		}, 30 );
+		Fleet_Jobs::wake();
+	}
 	public static function pending(): bool {
 		$q = self::get();
-		return null !== $q['all'] || $q['sites'] || $q['sources'];
+		return null !== $q['all'] || $q['sites'] || $q['sources'] || $q['consumers'];
 	}
 	private static function get(): array {
-		return (array) get_network_option( get_current_network_id(), self::QUEUE, array() ) + array( 'all' => null, 'sites' => array(), 'sources' => array() );
+		return (array) get_network_option( get_current_network_id(), self::QUEUE, array() ) + array( 'all' => null, 'sites' => array(), 'sources' => array(), 'consumers' => array() );
 	}
 	private static function put( array $q ): void { update_network_option( get_current_network_id(), self::QUEUE, $q ); }
 
@@ -60,6 +78,7 @@ class Fleet_Cache {
 		$q = self::get();
 		foreach ( $q['sites'] as $id => $state ) { return array( 'type' => 'site', 'id' => (int) $id, 'offset' => (int) $state[0], 'deps' => ! empty( $state[1] ) ); }
 		foreach ( $q['sources'] as $id => $offset ) { return array( 'type' => 'source', 'id' => (int) $id, 'offset' => (int) $offset ); }
+		foreach ( $q['consumers'] as $id => $offset ) { return array( 'type' => 'consumer', 'id' => (int) $id, 'offset' => (int) $offset ); }
 		return null === $q['all'] ? array() : array( 'type' => 'all', 'id' => 0, 'offset' => (int) $q['all'] );
 	}
 	private static function work( array $work ): array {
@@ -78,6 +97,7 @@ class Fleet_Cache {
 		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Database scope only; always restored in finally.
 		switch_to_blog( $work['id'] );
 		try {
+			if ( 'consumer' === $work['type'] ) { return self::consumer_posts( $work ); }
 			// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts -- suppress_filters=false explicitly enables VIP query caching.
 			$posts = get_posts( array( 'post_type' => array_values( get_post_types( array( 'public' => true ) ) ), 'suppress_filters' => false, 'post_status' => 'publish', 'numberposts' => self::PAGE, 'offset' => $work['offset'], 'orderby' => 'ID', 'order' => 'ASC', 'fields' => 'ids' ) );
 			foreach ( $posts as $k => $id ) {
@@ -86,6 +106,23 @@ class Fleet_Cache {
 			}
 			self::flush();
 		} finally { restore_current_blog(); }
+		return array( 'add' => array(), 'more' => count( $posts ) === self::PAGE, 'posts' => count( $posts ) );
+	}
+	/** Pages on the current site that embed shared content; a header or footer that embeds it means the whole site. */
+	private static function consumer_posts( array $work ): array {
+		global $wpdb;
+		$like = '%' . $wpdb->esc_like( '<!-- wp:brand-fleet/shared-content' ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Background purge scan of one site for the shared-content block comment; WP_Query cannot search post_content exactly.
+		if ( 0 === $work['offset'] && $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type IN ('wp_template_part','wp_template','wp_block') AND post_status = 'publish' AND post_content LIKE %s LIMIT 1", $like ) ) ) {
+			return array( 'add' => array( $work['id'] ), 'more' => false, 'posts' => 0 );
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- As above.
+		$posts = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_content LIKE %s ORDER BY ID ASC LIMIT %d OFFSET %d", $like, self::PAGE, $work['offset'] ) );
+		foreach ( $posts as $k => $id ) {
+			wpvip_purge_edge_cache_for_post( (int) $id );
+			if ( 0 === ( $k + 1 ) % self::FLUSH_EVERY ) { self::flush(); }
+		}
+		self::flush();
 		return array( 'add' => array(), 'more' => count( $posts ) === self::PAGE, 'posts' => count( $posts ) );
 	}
 	/** Send queued purges now instead of at shutdown, where anything past VIP's per-request cap is discarded. */
@@ -104,6 +141,8 @@ class Fleet_Cache {
 			}
 		} elseif ( 'source' === $work['type'] && ( $q['sources'][ $id ] ?? -1 ) === $work['offset'] ) {
 			if ( $result['more'] ) { $q['sources'][ $id ] = $next; } else { unset( $q['sources'][ $id ] ); }
+		} elseif ( 'consumer' === $work['type'] && ( $q['consumers'][ $id ] ?? -1 ) === $work['offset'] ) {
+			if ( $result['more'] ) { $q['consumers'][ $id ] = $next; } else { unset( $q['consumers'][ $id ] ); }
 		} elseif ( 'all' === $work['type'] && $q['all'] === $work['offset'] ) {
 			$q['all'] = $result['more'] ? $next : null;
 		}

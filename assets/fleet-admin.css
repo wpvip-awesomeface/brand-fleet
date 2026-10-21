@@ -47,3 +47,11 @@
 .brand-fleet-snippet ins { background: #edfaef; color: #00450c; text-decoration: none; margin-left: 2px; }
 .brand-fleet-embed-settings { margin-top: 12px; }
 .brand-fleet-definition-form input[name=key] { width: 18em; margin: 0 4px; }
+
+/* Segments */
+.brand-fleet-segment { margin: 0 0 16px; }
+.brand-fleet-segment legend { padding: 0 4px; }
+.brand-fleet-row { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; }
+.brand-fleet-row label { display: flex; flex-direction: column; gap: 4px; }
+.brand-fleet-row .regular-text { width: 18em; max-width: 100%; }
+.brand-fleet-inline { margin-right: 12px; white-space: nowrap; }

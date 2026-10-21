@@ -1,0 +1,24 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "brand-fleet/list",
+	"version": "1.0.0",
+	"title": "Variable List",
+	"category": "brand-fleet",
+	"icon": "editor-ul",
+	"description": "Shows a List variable, such as services or providers, as this site's own bulleted or numbered list.",
+	"keywords": [ "list", "services", "providers", "brand" ],
+	"textdomain": "brand-fleet",
+	"editorScript": "brand-fleet-list-editor",
+	"render": "file:./render.php",
+	"attributes": {
+		"variable": { "type": "string", "default": "" },
+		"ordered": { "type": "boolean", "default": false }
+	},
+	"supports": {
+		"html": false,
+		"color": { "text": true, "background": true },
+		"spacing": { "padding": true, "margin": true },
+		"typography": { "fontSize": true }
+	}
+}

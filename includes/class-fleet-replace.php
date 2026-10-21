@@ -140,6 +140,7 @@ class Fleet_Replace {
 		}
 		$meta = self::meta_swaps( $id, $spec, $n ); $total += $n;
 		if ( ! $total ) { return 'no longer matches'; }
+		Fleet_Undo::snapshot( $post, array_diff_key( $update, array( 'ID' => 1 ) ), $meta );
 		if ( count( $update ) > 1 ) {
 			$result = wp_update_post( wp_slash( $update ), true );
 			if ( is_wp_error( $result ) ) { return 'failed: ' . $result->get_error_message(); }
@@ -147,6 +148,7 @@ class Fleet_Replace {
 		// SEO and custom fields have no revisions; the preview listed them, and activity records the batch.
 		foreach ( $meta as $key => $value ) { update_post_meta( $id, $key, wp_slash( $value ) ); }
 		if ( $meta && 1 === count( $update ) ) { clean_post_cache( $id ); }
+		Fleet_Undo::snapshot_done( $id );
 		return 'replaced';
 	}
 }

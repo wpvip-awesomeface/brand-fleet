@@ -38,6 +38,7 @@ class Plugin {
 		( new Fleet_Onboarding() )->init();
 		( new Fleet_Embeds() )->init();
 		( new Fleet_Import() )->init();
+		( new Fleet_Schema() )->init();
 		// Locks must be shared by every site in the network.
 		wp_cache_add_global_groups( array( 'brand_fleet_locks' ) );
 		// Background batches and cache purges run on VIP Cron Control: one tick at a time, every minute while there is work.

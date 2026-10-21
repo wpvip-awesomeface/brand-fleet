@@ -55,3 +55,10 @@
 .brand-fleet-row label { display: flex; flex-direction: column; gap: 4px; }
 .brand-fleet-row .regular-text { width: 18em; max-width: 100%; }
 .brand-fleet-inline { margin-right: 12px; white-space: nowrap; }
+.brand-fleet-json { background: #f6f7f7; border: 1px solid #dcdcde; padding: 12px; max-height: 420px; overflow: auto; white-space: pre-wrap; }
+.brand-fleet-closures input[type=text] { width: 100%; }
+.brand-fleet-meter { display: block; width: 120px; height: 6px; background: #dcdcde; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+.brand-fleet-meter span { display: block; height: 100%; background: #2271b1; }
+.brand-fleet-history form { margin: 0; }
+.brand-fleet-count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: #d63638; color: #fff; font-size: 11px; line-height: 18px; text-align: center; margin-left: 4px; }
+.brand-fleet-request table th { width: 120px; }

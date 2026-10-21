@@ -68,8 +68,7 @@ class Fleet_Import {
 
 	public static function fetch( string $url ): string {
 		self::check_url( $url );
-		$args = array( 'timeout' => 10, 'limit_response_size' => self::MAX_BYTES, 'redirection' => 3 );
-		// Admin and cron only, never on a visitor request, so the 10-second timeout cannot slow a page.
+		$args = array( 'timeout' => 3, 'limit_response_size' => self::MAX_BYTES, 'redirection' => 3 );
 		$response = wp_safe_remote_get( $url, $args );
 		if ( is_wp_error( $response ) ) { throw new \RuntimeException( 'Could not download the spreadsheet: ' . $response->get_error_message() ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the UI handler.
 		if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) ) { throw new \RuntimeException( 'The spreadsheet link answered with HTTP ' . (int) wp_remote_retrieve_response_code( $response ) . '. Check that it is published to the web.' ); }
@@ -81,17 +80,20 @@ class Fleet_Import {
 		if ( strlen( $csv ) > self::MAX_BYTES ) { throw new \InvalidArgumentException( 'The spreadsheet is larger than 5 MB.' ); }
 		$csv = (string) preg_replace( '/^\xEF\xBB\xBF/', '', $csv );
 		if ( str_starts_with( ltrim( $csv ), '<' ) ) { throw new \InvalidArgumentException( 'That link returned a web page, not CSV. In Google Sheets use File → Share → Publish to web → CSV.' ); }
-		$handle = fopen( 'php://temp', 'r+' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- In-memory stream for fgetcsv; nothing touches disk.
-		fwrite( $handle, $csv ); rewind( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+		// In-memory CSV reader: the size check above keeps it under the memory limit, so nothing touches disk.
+		$file = new \SplTempFileObject( self::MAX_BYTES );
+		$file->fwrite( $csv );
+		$file->rewind();
+		$file->setFlags( \SplFileObject::READ_CSV | \SplFileObject::READ_AHEAD | \SplFileObject::SKIP_EMPTY );
+		$file->setCsvControl( ',', '"', '' );
 		$header = null; $rows = array();
-		while ( false !== ( $line = fgetcsv( $handle, 0, ',', '"', '' ) ) ) {
-			if ( array( null ) === $line ) { continue; }
+		foreach ( $file as $line ) {
+			if ( ! is_array( $line ) || array( null ) === $line ) { continue; }
 			$line = array_map( static fn( $cell ) => trim( (string) $cell ), $line );
 			if ( null === $header ) { $header = array_map( static fn( $name ) => strtolower( str_replace( array( '{', '}', ' ' ), array( '', '', '_' ), $name ) ), $line ); continue; }
-			if ( count( $rows ) >= self::MAX_ROWS ) { fclose( $handle ); throw new \InvalidArgumentException( 'Up to 10,000 rows per import.' ); } // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+			if ( count( $rows ) >= self::MAX_ROWS ) { throw new \InvalidArgumentException( 'Up to 10,000 rows per import.' ); }
 			$rows[] = array_combine( $header, array_pad( array_slice( $line, 0, count( $header ) ), count( $header ), '' ) );
 		}
-		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 		if ( ! $header || ! $rows ) { throw new \InvalidArgumentException( 'The spreadsheet needs a header row and at least one row of values.' ); }
 		return $rows;
 	}

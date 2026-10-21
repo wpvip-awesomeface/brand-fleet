@@ -13,6 +13,7 @@ class Fleet_Embeds {
 	/** Characters a token value may use inside embed code: IDs, keys and URLs, never quotes, brackets or semicolons. */
 	const SAFE_VALUE = '/^[A-Za-z0-9 _.,:@\/#+?=&%~\-]*$/D';
 
+	/** Hooks embed variables into the page head, body and footer. */
 	public function init(): void {
 		add_action( 'wp_head', static fn() => self::output( 'head' ), 20 );
 		add_action( 'wp_body_open', static fn() => self::output( 'body' ), 5 );
@@ -22,20 +23,46 @@ class Fleet_Embeds {
 	/** Embeds for the current site at one placement, with tokens resolved. */
 	public static function markup( string $placement ): string {
 		$site = get_current_blog_id();
-		if ( ! Fleet::profile( $site ) ) { return ''; }
-		$tokens = null; $out = '';
+		if ( ! Fleet::profile( $site ) ) {
+			return '';
+		}
+		$tokens = null;
+		$out    = '';
 		foreach ( Fleet::definitions() as $key => $d ) {
-			if ( 'embed' !== $d['type'] || '' === trim( (string) $d['default'] ) || ( $d['placement'] ?? 'head' ) !== $placement ) { continue; }
-			if ( ! empty( $d['targets'] ) && ! in_array( $site, $d['targets'], true ) ) { continue; }
-			if ( ! empty( $d['segment'] ) && ! Fleet_Segments::matches( $site, $d['segment'] ) ) { continue; }
-			$tokens = $tokens ?? array_map( static fn( $value ) => preg_match( self::SAFE_VALUE, (string) $value ) ? (string) $value : '', Settings::tokens() );
-			$out .= "\n<!-- Brand Fleet embed: " . esc_html( $key ) . " -->\n" . strtr( (string) $d['default'], $tokens ) . "\n";
+			if (
+				'embed' !== $d['type'] ||
+				'' === trim( (string) $d['default'] ) ||
+				( $d['placement'] ?? 'head' ) !== $placement
+			) {
+				continue;
+			}
+			if ( ! empty( $d['targets'] ) && ! in_array( $site, $d['targets'], true ) ) {
+				continue;
+			}
+			if ( ! empty( $d['segment'] ) && ! Fleet_Segments::matches( $site, $d['segment'] ) ) {
+				continue;
+			}
+			$tokens =
+				$tokens ??
+				array_map(
+					static fn( $value ) => preg_match( self::SAFE_VALUE, (string) $value ) ? (string) $value : '',
+					Settings::tokens()
+				);
+			$out   .=
+				"\n<!-- Brand Fleet embed: " .
+				esc_html( $key ) .
+				" -->\n" .
+				strtr( (string) $d['default'], $tokens ) .
+				"\n";
 		}
 		return $out;
 	}
 
 	private static function output( string $placement ): void {
-		if ( is_admin() || is_feed() || is_embed() ) { return; }
-		echo self::markup( $placement ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Network-locked markup saved by a network admin with unfiltered_html; token values are restricted to SAFE_VALUE.
+		if ( is_admin() || is_feed() || is_embed() ) {
+			return;
+		}
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Network-locked markup saved by a network admin with unfiltered_html; token values are restricted to SAFE_VALUE.
+		echo self::markup( $placement );
 	}
 }

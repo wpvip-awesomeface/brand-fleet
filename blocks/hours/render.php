@@ -14,20 +14,35 @@ namespace BrandFleet;
 $brand_fleet_key = Blocks::variable( (string) ( $attributes['variable'] ?? '' ), 'hours' );
 $brand_fleet_value = '' === $brand_fleet_key ? '' : Blocks::value( $brand_fleet_key );
 $brand_fleet_hours = null;
-try { $brand_fleet_hours = '' === $brand_fleet_value ? null : Fleet_Hours::parse( $brand_fleet_value ); } catch ( \InvalidArgumentException $e ) { $brand_fleet_hours = null; }
+try {
+	$brand_fleet_hours = '' === $brand_fleet_value ? null : Fleet_Hours::parse( $brand_fleet_value );
+} catch ( \InvalidArgumentException $e ) {
+	$brand_fleet_hours = null;
+}
 
 if ( ! $brand_fleet_hours ) {
 	if ( current_user_can( 'edit_posts' ) ) {
-		printf( '<div %s><em>%s</em></div>', get_block_wrapper_attributes( array( 'class' => 'brand-fleet-hours brand-fleet-hours--empty' ) ), esc_html__( 'Opening Hours: this site has no hours yet. Add an Opening hours variable under Brand Fleet → Variables, then set this site\'s hours.', 'brand-fleet' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Wrapper attributes are pre-escaped by core.
+		printf(
+			'<div %s><em>%s</em></div>',
+			get_block_wrapper_attributes( array( 'class' => 'brand-fleet-hours brand-fleet-hours--empty' ) ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Wrapper attributes are pre-escaped by core.
+			esc_html__( 'Opening Hours: this site has no hours yet. Add an Opening hours variable under Brand Fleet → Variables, then set this site\'s hours.', 'brand-fleet' )
+		);
 	}
 	return;
 }
 
 $brand_fleet_site = get_current_blog_id();
 $brand_fleet_next = Fleet_Hours::upcoming( $brand_fleet_site, $brand_fleet_hours, 8 );
-$brand_fleet_special = array_filter( Fleet_Hours::upcoming( $brand_fleet_site, $brand_fleet_hours, 21 ), static function ( $row ) use ( $brand_fleet_hours ) {
-	return null === $brand_fleet_hours['week'] || $row['ranges'] !== ( $brand_fleet_hours['week'][ strtolower( $row['day']->format( 'D' ) ) ] ?? array() );
-} );
+$brand_fleet_special = array_filter(
+	Fleet_Hours::upcoming( $brand_fleet_site, $brand_fleet_hours, 21 ),
+	static function ( $row ) use ( $brand_fleet_hours ) {
+		if ( null === $brand_fleet_hours['week'] ) {
+			return true;
+		}
+		$weekly = $brand_fleet_hours['week'][ strtolower( $row['day']->format( 'D' ) ) ] ?? array();
+		return $row['ranges'] !== $weekly;
+	}
+);
 $brand_fleet_zone = wp_timezone_string();
 ?>
 <div <?php echo get_block_wrapper_attributes( array( 'class' => 'brand-fleet-hours' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Pre-escaped by core. ?>>

@@ -11,6 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Admin {
 
+	/** Hooks the per-site Brand Identity settings page and its assets. */
 	public function init(): void {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
@@ -52,6 +53,7 @@ class Admin {
 		<?php
 	}
 
+	/** Adds the Settings → Brand Identity page. */
 	public function menu(): void {
 		add_options_page(
 			__( 'Brand Identity', 'brand-fleet' ),
@@ -78,6 +80,7 @@ class Admin {
 		<?php
 	}
 
+	/** Renders the Brand Identity settings page. */
 	public function render(): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -96,11 +99,31 @@ class Admin {
 				<h2><?php esc_html_e( 'Branding', 'brand-fleet' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<?php
-					$this->text_row( Settings::OPT_BUSINESS_NAME, __( 'Business name', 'brand-fleet' ), __( 'Short display name, e.g. "Example Brand". Replaces {{business_name}}.', 'brand-fleet' ) );
-					$this->text_row( Settings::OPT_LEGAL_NAME, __( 'Legal name', 'brand-fleet' ), __( 'Full legal entity, e.g. "Example Brand Holdings, Inc.". Replaces {{legal_name}} and drives the copyright line.', 'brand-fleet' ) );
-					$this->image_row( Settings::OPT_LOGO_URL, __( 'Brand logo', 'brand-fleet' ), __( 'The secondary logo that swaps per site (header + footer).', 'brand-fleet' ) );
-					$this->image_row( Settings::OPT_LOGO_FOOTER_URL, __( 'Footer logo', 'brand-fleet' ), __( 'Optional dark-background variant for the footer; falls back to the brand logo.', 'brand-fleet' ) );
-					$this->image_row( Settings::OPT_PARENT_LOGO_URL, __( 'Parent logo', 'brand-fleet' ), __( 'The constant parent-company mark. Leave empty on spoke sites to inherit the master\'s.', 'brand-fleet' ) );
+					$this->text_row(
+						Settings::OPT_BUSINESS_NAME,
+						__( 'Business name', 'brand-fleet' ),
+						__( 'Short display name, e.g. "Example Brand". Replaces {{business_name}}.', 'brand-fleet' )
+					);
+					$this->text_row(
+						Settings::OPT_LEGAL_NAME,
+						__( 'Legal name', 'brand-fleet' ),
+						__( 'Full legal entity, e.g. "Example Brand Holdings, Inc.". Replaces {{legal_name}} and drives the copyright line.', 'brand-fleet' )
+					);
+					$this->image_row(
+						Settings::OPT_LOGO_URL,
+						__( 'Brand logo', 'brand-fleet' ),
+						__( 'The secondary logo that swaps per site (header + footer).', 'brand-fleet' )
+					);
+					$this->image_row(
+						Settings::OPT_LOGO_FOOTER_URL,
+						__( 'Footer logo', 'brand-fleet' ),
+						__( 'Optional dark-background variant for the footer; falls back to the brand logo.', 'brand-fleet' )
+					);
+					$this->image_row(
+						Settings::OPT_PARENT_LOGO_URL,
+						__( 'Parent logo', 'brand-fleet' ),
+						__( 'The constant parent-company mark. Leave empty on spoke sites to inherit the master\'s.', 'brand-fleet' )
+					);
 					?>
 					<tr>
 						<th scope="row"><label for="<?php echo esc_attr( Settings::OPT_ACCENT ); ?>"><?php esc_html_e( 'Accent color', 'brand-fleet' ); ?></label></th>
@@ -149,7 +172,11 @@ class Admin {
 				<h2><?php esc_html_e( 'Content source', 'brand-fleet' ); ?></h2>
 				<table class="form-table" role="presentation">
 					<?php
-					$this->text_row( Settings::OPT_MASTER_SITE, __( 'Master site', 'brand-fleet' ), __( 'Blog ID or sub-site path (e.g. "master-brand") that shared-content blocks pull from. Leave empty if this site IS the master.', 'brand-fleet' ) );
+					$this->text_row(
+						Settings::OPT_MASTER_SITE,
+						__( 'Master site', 'brand-fleet' ),
+						__( 'Blog ID or sub-site path (e.g. "master-brand") that shared-content blocks pull from. Leave empty if this site IS the master.', 'brand-fleet' )
+					);
 					?>
 				</table>
 

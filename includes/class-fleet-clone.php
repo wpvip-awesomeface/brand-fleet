@@ -131,7 +131,7 @@ class Fleet_Clone {
 				$change  = array();
 				if ( $parent && isset( $map[ $parent ] ) ) { $change['post_parent'] = $map[ $parent ]; }
 				if ( $content !== $p['post_content'] ) { $change['post_content'] = $content; }
-				if ( $change ) { wp_update_post( wp_slash( array( 'ID' => $map[ (int) $p['ID'] ] ) + $change ) ); }
+				if ( $change ) { Fleet::update_post( wp_slash( array( 'ID' => $map[ (int) $p['ID'] ] ) + $change ) ); }
 			}
 			foreach ( array( 'page_on_front', 'page_for_posts' ) as $name ) { update_option( $name, $map[ $items[ $name ] ] ?? 0 ); }
 			delete_option( 'rewrite_rules' );

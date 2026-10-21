@@ -57,6 +57,7 @@ try {
 	ok( str_contains( Fleet_Embeds::markup( 'footer' ), 'gtag("config","G-ABC123")' ), 'embed prints on a targeted site with its value' );
 	ok( ! str_contains( Fleet_Embeds::markup( 'head' ), 'embed: t_embed' ), 'embed only prints at its placement' );
 	$page_a = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'About Acme Widgets', 'post_content' => '<!-- wp:paragraph --><p>Acme Widgets builds things. <a href="https://acme.example/acme widgets">Acme Widgets</a></p><!-- /wp:paragraph -->' ) );
+	update_post_meta( $page_a, '_wp_page_template', 'landing' ); // Not registered by the theme: core would reset it to "default" on update.
 	$page_skip = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Leave me', 'post_content' => '<p>acme widgets here</p>' ) );
 	$page_late = wp_insert_post( array( 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Edited later', 'post_content' => '<p>Acme Widgets later</p>' ) );
 	restore_current_blog();
@@ -85,6 +86,7 @@ try {
 	ok( str_contains( $a->post_content, '<p>{{business_name}} builds things.' ) && str_contains( $a->post_content, '>{{business_name}}</a>' ), 'visible text is replaced' );
 	ok( str_contains( $a->post_content, 'href="https://acme.example/acme widgets"' ), 'links are untouched unless markup is included' );
 	ok( (bool) wp_get_post_revisions( $page_a ), 'a revision is kept for rollback' );
+	ok( 'landing' === get_post_meta( $page_a, '_wp_page_template', true ), 'page template is kept by replace' );
 	ok( str_contains( get_post( $page_skip )->post_content, 'acme widgets here' ), 'left-out page is untouched' );
 	ok( str_contains( get_post( $page_late )->post_content, 'edited after preview' ), 'page edited after preview is skipped' );
 	restore_current_blog();

@@ -142,7 +142,7 @@ class Fleet_Replace {
 		if ( ! $total ) { return 'no longer matches'; }
 		Fleet_Undo::snapshot( $post, array_diff_key( $update, array( 'ID' => 1 ) ), $meta );
 		if ( count( $update ) > 1 ) {
-			$result = wp_update_post( wp_slash( $update ), true );
+			$result = Fleet::update_post( wp_slash( $update ), true );
 			if ( is_wp_error( $result ) ) { return 'failed: ' . $result->get_error_message(); }
 		}
 		// SEO and custom fields have no revisions; the preview listed them, and activity records the batch.

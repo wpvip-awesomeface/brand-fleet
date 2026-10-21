@@ -63,6 +63,19 @@ class Fleet {
 	private static array $memo = array();
 	public static function flush(): void { self::$memo = array(); Fleet_Segments::flush(); Settings::flush(); }
 
+	/**
+	 * wp_update_post() that leaves the page template alone. Core re-sends the stored _wp_page_template on
+	 * every update and, when the site does not register it (yet), resets it to "default" or, with
+	 * $wp_error, refuses the whole update. An empty page_template skips that check; the meta is untouched.
+	 *
+	 * @param array $postarr  Slashed post fields, with ID.
+	 * @param bool  $wp_error Return a WP_Error on failure.
+	 * @return int|\WP_Error
+	 */
+	public static function update_post( array $postarr, bool $wp_error = false ) {
+		return wp_update_post( $postarr + array( 'page_template' => '' ), $wp_error );
+	}
+
 	public static function site( int $id ): bool {
 		$site = get_site( $id );
 		return $site && (int) $site->network_id === get_current_network_id() && ! $site->deleted && ! $site->archived && ! $site->spam;

@@ -147,7 +147,7 @@ class Fleet_Undo {
 				$snap = get_post_meta( (int) $m['post'], $key, true );
 				if ( ! is_array( $snap ) || ( $snap['after'] ?? '' ) !== self::state( (int) $m['post'], array_keys( $snap['fields'] ), array_keys( $snap['meta'] ) ) ) { $row['matches'][ $k ]['result'] = 'changed since, left as is'; continue; }
 				if ( $snap['fields'] ) {
-					$result = wp_update_post( wp_slash( array( 'ID' => (int) $m['post'] ) + $snap['fields'] ), true );
+					$result = Fleet::update_post( wp_slash( array( 'ID' => (int) $m['post'] ) + $snap['fields'] ), true );
 					if ( is_wp_error( $result ) ) { $row['matches'][ $k ]['result'] = 'failed: ' . $result->get_error_message(); continue; }
 				}
 				foreach ( $snap['meta'] as $meta_key => $value ) { update_post_meta( (int) $m['post'], $meta_key, wp_slash( $value ) ); }

@@ -40,7 +40,7 @@ class Fleet_Onboarding {
 				foreach ( $ids as $id ) {
 					$content = (string) get_post_field( 'post_content', $id, 'raw' );
 					$updated = strtr( $content, $map );
-					if ( $updated !== $content ) { wp_update_post( array( 'ID' => $id, 'post_content' => wp_slash( $updated ) ) ); }
+					if ( $updated !== $content ) { Fleet::update_post( array( 'ID' => $id, 'post_content' => wp_slash( $updated ) ) ); }
 				}
 			}
 		} finally {

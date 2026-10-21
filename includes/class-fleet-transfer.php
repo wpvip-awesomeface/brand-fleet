@@ -6,7 +6,7 @@ defined( 'ABSPATH' ) || exit;
 
 class Fleet_Transfer {
 	const FORMAT_VERSION = 1;
-	const DIFF_FIELDS = array( 'label', 'type', 'default', 'scope', 'access', 'required', 'clone', 'help', 'group', 'options', 'placement' );
+	const DIFF_FIELDS = array( 'label', 'type', 'default', 'scope', 'access', 'required', 'clone', 'help', 'group', 'options', 'placement', 'identifier', 'segment_defaults', 'segment' );
 
 	/** Definitions only: no site data crosses networks, and site IDs from one network are meaningless on another. */
 	public static function export(): array {
@@ -100,7 +100,7 @@ class Fleet_Transfer {
 
 	public static function apply_import( array $document, string $expected ): array {
 		return Fleet::locked( 'schema', static function () use ( $document, $expected ) {
-			if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
+			if ( ! Fleet::can( 'manage' ) ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
 			if ( ! hash_equals( $expected, Fleet::hash( Fleet::definitions() ) ) ) { throw new \RuntimeException( 'Definitions changed; reload and preview again.' ); }
 			$accepted = self::classify( $document )['accepted'];
 			if ( ! $accepted ) { return array(); }
@@ -112,6 +112,8 @@ class Fleet_Transfer {
 				$defs[ $key ] = $d;
 			}
 			update_network_option( get_current_network_id(), Fleet::SCHEMA, $defs );
+			Fleet::flush();
+			Fleet_Segments::reindex_all();
 			$keys = array_keys( $accepted );
 			Fleet::audit( 'import', 0, $keys );
 			Fleet_Cache::schedule();

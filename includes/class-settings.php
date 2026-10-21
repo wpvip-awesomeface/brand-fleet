@@ -144,6 +144,11 @@ class Settings {
 	 * has no master (it IS the master, or is standalone).
 	 */
 	public static function master_blog_id(): int {
+		// A "content_master" variable (a site ID) picks the master per segment, e.g. the French master for French sites.
+		if ( isset( Fleet::definitions()['content_master'] ) && Fleet::profile( get_current_blog_id() ) ) {
+			$id = absint( Fleet::resolved( get_current_blog_id(), 'content_master' )['value'] );
+			if ( $id && Fleet::site( $id ) ) { return $id; }
+		}
 		$raw = trim( self::get( self::OPT_MASTER_SITE ) );
 		if ( '' === $raw ) {
 			return 0;
@@ -188,7 +193,16 @@ class Settings {
 		);
 	}
 
+	/** Token maps per site for this request; Fleet::flush() clears them after any fleet write. */
+	private static array $tokens = array();
+	public static function flush(): void { self::$tokens = array(); }
+
 	public static function tokens(): array {
+		$site = get_current_blog_id();
+		if ( ! isset( self::$tokens[ $site ] ) ) { self::$tokens[ $site ] = self::build_tokens(); }
+		return self::$tokens[ $site ];
+	}
+	private static function build_tokens(): array {
 		$address = trim( self::get( self::OPT_ADDRESS ) );
 		$address = preg_replace( '/\s*\R\s*/', ', ', $address );
 		$tokens = array(
@@ -211,6 +225,8 @@ class Settings {
 
 	public function init(): void {
 		add_action( 'admin_init', array( $this, 'register' ) );
+		// Writes made outside the plugin's own save paths still reach this request's caches.
+		foreach ( array( 'update_option_' . Fleet::PROFILE, 'add_option_' . Fleet::PROFILE, 'delete_option_' . Fleet::PROFILE, 'update_site_option_' . Fleet::SCHEMA, 'add_site_option_' . Fleet::SCHEMA, 'update_site_option_' . Fleet_Segments::OPTION, 'add_site_option_' . Fleet_Segments::OPTION ) as $hook ) { add_action( $hook, array( Fleet::class, 'flush' ) ); }
 	}
 
 	public function register(): void {

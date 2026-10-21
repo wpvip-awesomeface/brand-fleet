@@ -14,21 +14,44 @@ class Fleet {
 	/** Value types and their admin labels. A definition's type never changes after creation. */
 	const TYPES = array( 'text' => 'Text', 'textarea' => 'Multiline text', 'url' => 'Link (URL)', 'image' => 'Image', 'email' => 'Email', 'phone' => 'Phone number', 'color' => 'Color', 'number' => 'Number', 'select' => 'Dropdown', 'toggle' => 'Yes / No', 'date' => 'Date', 'embed' => 'Embed code' );
 	/** Optional definition settings; older definitions may not carry them. */
-	const EXTRAS = array( 'help' => '', 'group' => '', 'options' => array(), 'placement' => 'head', 'targets' => array() );
+	const EXTRAS = array( 'help' => '', 'group' => '', 'options' => array(), 'placement' => 'head', 'targets' => array(), 'segment' => '', 'segment_defaults' => array(), 'identifier' => false );
 	/** Where an embed prints. */
 	const PLACEMENTS = array( 'head' => 'In the page head', 'body' => 'At the start of the page body', 'footer' => 'At the end of the page' );
 	/** Network option: custom field keys whose front-end values swap {{tokens}}. */
 	const META_KEYS = 'brand_fleet_meta_keys';
+	/** network: one value (per segment); location: per site, people may set it; imported: per site, written only by imports. */
+	const SCOPES = array( 'network', 'location', 'imported' );
 	/** Bulk writes are audited and purged once per checkpoint by Fleet_Jobs, not once per site. */
 	private static bool $bulk = false;
 	public static function bulk_write( callable $callback ) {
 		self::$bulk = true;
 		try { return $callback(); } finally { self::$bulk = false; }
 	}
+	/** Imported-scope values can only be written inside an import. */
+	private static bool $importing = false;
+	public static function import_write( callable $callback ) {
+		self::$importing = true;
+		try { return $callback(); } finally { self::$importing = false; }
+	}
 
 	public static function network_admin(): bool {
 		return is_multisite() && current_user_can( 'manage_network_options' );
 	}
+	/** Fleet capabilities, granted to roles on the main site so central editors need not be super admins. */
+	const CAPS = array( 'manage' => 'brand_fleet_manage', 'bulk' => 'brand_fleet_bulk', 'values' => 'brand_fleet_edit_values' );
+	/** Network admins can do everything; "manage" includes the other two. */
+	public static function can( string $what ): bool {
+		if ( ! is_multisite() ) { return false; }
+		if ( self::network_admin() ) { return true; }
+		$main = (int) get_main_site_id();
+		if ( current_user_can_for_site( $main, self::CAPS['manage'] ) ) { return true; }
+		return isset( self::CAPS[ $what ] ) && 'manage' !== $what && current_user_can_for_site( $main, self::CAPS[ $what ] );
+	}
+	public static function can_any(): bool { return self::can( 'manage' ) || self::can( 'bulk' ) || self::can( 'values' ); }
+
+	/** Per-request caches of definitions and resolved values; cleared whenever fleet data is written. */
+	private static array $memo = array();
+	public static function flush(): void { self::$memo = array(); Fleet_Segments::flush(); Settings::flush(); }
 
 	public static function site( int $id ): bool {
 		$site = get_site( $id );
@@ -36,7 +59,9 @@ class Fleet {
 	}
 
 	public static function definitions(): array {
-		$saved = get_network_option( get_current_network_id(), self::SCHEMA, array() );
+		$network = get_current_network_id();
+		if ( isset( self::$memo['defs'][ $network ] ) ) { return self::$memo['defs'][ $network ]; }
+		$saved = get_network_option( $network, self::SCHEMA, array() );
 		$defaults = array();
 		foreach ( Settings::defaults() as $option => $value ) {
 			if ( Settings::OPT_MASTER_SITE === $option ) { continue; }
@@ -44,7 +69,7 @@ class Fleet {
 			$type = str_contains( $key, 'url' ) || str_starts_with( $key, 'social_' ) ? 'url' : ( in_array( $key, array( 'address', 'footer_services' ), true ) ? 'textarea' : ( 'accent' === $key ? 'color' : 'text' ) );
 			$defaults[ $key ] = array( 'label' => ucwords( str_replace( '_', ' ', $key ) ), 'type' => $type, 'default' => $value, 'scope' => 'location', 'access' => 'all', 'sites' => array(), 'required' => false, 'clone' => in_array( $key, array( 'business_name', 'legal_name', 'address' ), true ) );
 		}
-		return array_replace( $defaults, is_array( $saved ) ? $saved : array() );
+		return self::$memo['defs'][ $network ] = array_replace( $defaults, is_array( $saved ) ? $saved : array() );
 	}
 
 	public static function clean( $value, array $definition ): string {
@@ -95,11 +120,13 @@ class Fleet {
 	}
 	private static function write_definition( string $key, array $input, string $expected ): void {
 		if ( '' !== $expected && ! hash_equals( $expected, self::hash( self::definitions() ) ) ) { throw new \RuntimeException( 'Definitions changed; reload before saving.' ); }
-		if ( ! self::network_admin() ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
+		if ( ! self::can( 'manage' ) ) { throw new \RuntimeException( 'Fleet manager permission required.' ); }
 		$defs = self::definitions();
 		$d = self::validate_definition( $defs, $key, $input );
 		$defs[ $key ] = $d;
 		update_network_option( get_current_network_id(), self::SCHEMA, $defs );
+		self::flush();
+		Fleet_Segments::reindex_all();
 		self::audit( 'definition', 0, array( $key ) );
 		Fleet_Cache::schedule();
 	}
@@ -110,8 +137,11 @@ class Fleet {
 		$type = $input['type'] ?? 'text';
 		if ( ! isset( self::TYPES[ $type ] ) ) { throw new \InvalidArgumentException( 'Unsupported variable type.' ); }
 		if ( isset( $defs[ $key ] ) && $defs[ $key ]['type'] !== $type ) { throw new \InvalidArgumentException( 'Existing types are immutable; create a new key for a different type.' ); }
-		if ( ! in_array( $input['scope'] ?? 'location', array( 'network', 'location' ), true ) || ! in_array( $input['access'] ?? 'none', array( 'all', 'selected', 'none' ), true ) ) { throw new \InvalidArgumentException( 'Choose a valid scope and delegation policy.' ); }
-		$d = array( 'label' => sanitize_text_field( $input['label'] ?? $key ), 'type' => $type, 'scope' => ( $input['scope'] ?? '' ) === 'network' ? 'network' : 'location', 'access' => in_array( $input['access'] ?? '', array( 'all', 'selected', 'none' ), true ) ? $input['access'] : 'none', 'sites' => self::site_ids( $input['sites'] ?? array() ), 'required' => ! empty( $input['required'] ), 'clone' => ! empty( $input['clone'] ) );
+		if ( ! in_array( $input['scope'] ?? 'location', self::SCOPES, true ) || ! in_array( $input['access'] ?? 'none', array( 'all', 'selected', 'none' ), true ) ) { throw new \InvalidArgumentException( 'Choose a valid scope and delegation policy.' ); }
+		$scope = in_array( $input['scope'] ?? '', self::SCOPES, true ) ? $input['scope'] : 'location';
+		$d = array( 'label' => sanitize_text_field( $input['label'] ?? $key ), 'type' => $type, 'scope' => $scope, 'access' => 'location' === $scope && in_array( $input['access'] ?? '', array( 'all', 'selected', 'none' ), true ) ? $input['access'] : 'none', 'sites' => 'location' === $scope ? self::site_ids( $input['sites'] ?? array() ) : array(), 'required' => ! empty( $input['required'] ), 'clone' => ! empty( $input['clone'] ) );
+		// Identifiers (practice code, content master) are indexed so imports and purges can find a site by value.
+		$d['identifier'] = ! empty( $input['identifier'] ) && in_array( $type, array( 'text', 'number', 'email', 'phone', 'url' ), true );
 		$d['help'] = mb_substr( sanitize_text_field( (string) ( $input['help'] ?? '' ) ), 0, 200 );
 		$d['group'] = mb_substr( sanitize_text_field( (string) ( $input['group'] ?? '' ) ), 0, 40 );
 		$d['options'] = self::options( $type, $input['options'] ?? array() );
@@ -121,10 +151,23 @@ class Fleet {
 			$d = array_merge( $d, array( 'scope' => 'network', 'access' => 'none', 'sites' => array(), 'required' => false, 'clone' => false ) );
 			$d['placement'] = isset( self::PLACEMENTS[ $input['placement'] ?? '' ] ) ? $input['placement'] : 'head';
 			$d['targets'] = self::site_ids( $input['targets'] ?? array() );
+			$d['segment'] = sanitize_key( (string) ( $input['segment'] ?? '' ) );
+			if ( '' !== $d['segment'] && ! isset( Fleet_Segments::all()[ $d['segment'] ] ) ) { throw new \InvalidArgumentException( 'Choose an existing segment.' ); }
 		}
 		foreach ( array_merge( $d['sites'], $d['targets'] ?? array() ) as $id ) { if ( ! self::site( $id ) ) { throw new \InvalidArgumentException( 'Selected locations must belong to this network.' ); } }
 		$d['default'] = self::clean( $input['default'] ?? '', $d );
 		if ( 'network' === $d['scope'] && $d['required'] && '' === $d['default'] ) { throw new \InvalidArgumentException( 'Required network variables need a default.' ); }
+		$d['segment_defaults'] = array();
+		if ( 'embed' !== $type ) {
+			$segments = Fleet_Segments::all();
+			foreach ( (array) ( $input['segment_defaults'] ?? array() ) as $slug => $value ) {
+				if ( ! is_string( $value ) || '' === $value ) { continue; }
+				if ( ! isset( $segments[ $slug ] ) ) { throw new \InvalidArgumentException( 'Unknown segment: ' . sanitize_key( (string) $slug ) ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Escaped by the UI handler.
+				// A segment defined by this variable cannot also give it a default: that would be circular.
+				if ( isset( $segments[ $slug ]['rules'][ $key ] ) ) { throw new \InvalidArgumentException( 'A segment cannot set a default for a variable it is defined by.' ); }
+				$d['segment_defaults'][ $slug ] = self::clean( $value, $d );
+			}
+		}
 		return $d;
 	}
 
@@ -152,7 +195,7 @@ class Fleet {
 	}
 	/** Custom field keys are network configuration: up to 50 plain keys, no serialized or protected-looking values. */
 	public static function save_meta_keys( string $input ): array {
-		if ( ! self::network_admin() ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
+		if ( ! self::can( 'manage' ) ) { throw new \RuntimeException( 'Network administrator permission required.' ); }
 		$keys = array_values( array_unique( array_filter( array_map( 'trim', preg_split( '/[\s,]+/', $input ) ) ) ) );
 		foreach ( $keys as $key ) { if ( ! preg_match( '/^[A-Za-z0-9_\-]{1,191}$/D', $key ) ) { throw new \InvalidArgumentException( 'Custom field keys may use letters, numbers, - and _ only.' ); } }
 		if ( count( $keys ) > 50 ) { throw new \InvalidArgumentException( 'Choose up to 50 custom fields.' ); }
@@ -171,11 +214,30 @@ class Fleet {
 		return 'location' === $d['scope'] && ( 'all' === $d['access'] || ( 'selected' === $d['access'] && in_array( $site, $d['sites'], true ) ) );
 	}
 
-	public static function resolved( int $site, string $key ): array {
+	/**
+	 * A site's value and where it came from: the site's own value, then its main data site,
+	 * then the first matching segment default (in segment order), then the network default.
+	 * Network-scope values skip the first two. $segments is false only while segments
+	 * themselves are being evaluated, so membership never depends on a segment default.
+	 */
+	public static function resolved( int $site, string $key, bool $segments = true ): array {
+		$memo = $site . ':' . $key . ':' . (int) $segments;
+		if ( isset( self::$memo['resolved'][ $memo ] ) ) { return self::$memo['resolved'][ $memo ]; }
+		return self::$memo['resolved'][ $memo ] = self::resolve( $site, $key, $segments );
+	}
+	private static function resolve( int $site, string $key, bool $segments ): array {
 		$d = self::definitions()[ $key ] ?? null;
 		if ( ! $d ) { return array( 'value' => '', 'source' => 'undefined' ); }
 		$p = self::profile( $site );
-		if ( 'network' === $d['scope'] ) { return array( 'value' => $d['default'], 'source' => 'network' ); }
+		$fallback = static function () use ( $d, $site, $segments ): array {
+			if ( $segments && self::profile( $site ) ) {
+				foreach ( array_keys( Fleet_Segments::all() ) as $slug ) {
+					if ( array_key_exists( $slug, (array) ( $d['segment_defaults'] ?? array() ) ) && Fleet_Segments::matches( $site, $slug ) ) { return array( 'value' => $d['segment_defaults'][ $slug ], 'source' => 'segment ' . $slug ); }
+				}
+			}
+			return array( 'value' => $d['default'], 'source' => 'network' );
+		};
+		if ( 'network' === $d['scope'] ) { return $fallback(); }
 		if ( ! $p && array_key_exists( 'brand_fleet_' . $key, Settings::defaults() ) ) {
 			$legacy = get_blog_option( $site, 'brand_fleet_' . $key, '' );
 			if ( is_string( $legacy ) && '' !== $legacy ) { return array( 'value' => $legacy, 'source' => 'existing site setting' ); }
@@ -190,7 +252,7 @@ class Fleet {
 				if ( is_string( $legacy ) && '' !== $legacy ) { return array( 'value' => $legacy, 'source' => 'main site ' . $source ); }
 			}
 		}
-		return array( 'value' => $d['default'], 'source' => 'network' );
+		return $fallback();
 	}
 
 	/** Patch uses null to reset inheritance and an empty string as an explicit blank. */
@@ -199,12 +261,12 @@ class Fleet {
 	}
 
 	private static function write_profile( int $site, array $patch, ?array $connections, string $expected, bool $preview ): array {
-		if ( ! self::site( $site ) || ( ! self::network_admin() && ! current_user_can_for_site( $site, 'manage_options' ) ) ) { throw new \RuntimeException( 'You cannot manage this site.' ); }
+		if ( ! self::site( $site ) || ( ! self::can( 'values' ) && ! ( self::$importing && self::can( 'bulk' ) ) && ! current_user_can_for_site( $site, 'manage_options' ) ) ) { throw new \RuntimeException( 'You cannot manage this site.' ); }
 		$old = self::profile( $site );
 		if ( '' !== $expected && ! hash_equals( $expected, self::hash( $old ) ) ) { throw new \RuntimeException( 'Site changed since preview; refresh before saving.' ); }
 		$p = $old;
 		if ( null !== $connections ) {
-			if ( ! self::network_admin() ) { throw new \RuntimeException( 'Only network administrators can change connections.' ); }
+			if ( ! self::can( 'manage' ) ) { throw new \RuntimeException( 'Only fleet managers can change connections.' ); }
 			foreach ( array( 'group_id', 'source_id', 'template_id' ) as $field ) {
 				$id = absint( $connections[ $field ] ?? 0 );
 				if ( $id && ! self::site( $id ) ) { throw new \InvalidArgumentException( 'Connections must be active sites in this network.' ); }
@@ -228,7 +290,8 @@ class Fleet {
 		$defs = self::definitions();
 		foreach ( $patch as $key => $value ) {
 			if ( ! isset( $defs[ $key ] ) || 'network' === $defs[ $key ]['scope'] ) { throw new \InvalidArgumentException( 'Unknown or network-locked variable: ' . $key ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is escaped by UI handler; API returns structured errors.
-			if ( ! self::network_admin() && ! self::editable( $defs[ $key ], $site ) ) { throw new \RuntimeException( 'This variable is controlled by the network: ' . $key ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is escaped by UI handler; API returns structured errors.
+			if ( 'imported' === $defs[ $key ]['scope'] && ! self::$importing ) { throw new \InvalidArgumentException( 'This variable comes from an import and cannot be edited here: ' . $key ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is escaped by UI handler; API returns structured errors.
+			if ( ! self::$importing && ! self::can( 'values' ) && ! self::editable( $defs[ $key ], $site ) ) { throw new \RuntimeException( 'This variable is controlled by the network: ' . $key ); } // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception is escaped by UI handler; API returns structured errors.
 			if ( null === $value ) { unset( $p['values'][ $key ] ); } else { $p['values'][ $key ] = self::clean( $value, $defs[ $key ] ); }
 		}
 		foreach ( $defs as $key => $d ) {
@@ -241,6 +304,8 @@ class Fleet {
 		if ( $preview ) { return $p; }
 		update_blog_option( $site, self::PROFILE, $p );
 		update_site_meta( $site, self::MANAGED, 1 );
+		self::flush();
+		Fleet_Segments::reindex_site( $site, true );
 		// Encode relationship IDs in indexed meta keys; never filter unindexed meta_value.
 		foreach ( array( 'group', 'source' ) as $relation ) {
 			$previous = (int) ( $old[ $relation . '_id' ] ?? 0 );

@@ -22,9 +22,10 @@ class Fleet_Jobs {
 	private static function key( int $user = 0 ): string { return 'brand_fleet_job_' . ( $user ? $user : get_current_user_id() ); }
 	private static function chunk_key( array $j, int $n ): string { return self::key( (int) $j['user'] ) . '_' . $n; }
 	private static function replacing( array $j ): bool { return 'replace' === ( $j['kind'] ?? '' ); }
-	/** Find and replace rows hold match lists and write posts, so they use smaller chunks and steps. */
-	private static function chunk( array $j ): int { return self::replacing( $j ) ? 25 : self::CHUNK; }
-	private static function step_size( array $j ): int { return self::replacing( $j ) ? 5 : self::STEP; }
+	private static function kind( array $j ): string { return (string) ( $j['kind'] ?? 'bulk' ); }
+	/** Find and replace and token-check rows hold match lists (and replace writes posts), so they use smaller chunks and steps; import rows carry per-site values. */
+	private static function chunk( array $j ): int { return array( 'replace' => 25, 'report' => 25, 'import' => 100 )[ self::kind( $j ) ] ?? self::CHUNK; }
+	private static function step_size( array $j ): int { return array( 'replace' => 5, 'report' => 10 )[ self::kind( $j ) ] ?? self::STEP; }
 	public static function get( int $user = 0 ): array { return (array) get_network_option( get_current_network_id(), self::key( $user ), array() ); }
 	private static function store( array $j ): array { update_network_option( get_current_network_id(), self::key( (int) $j['user'] ), $j ); return $j; }
 
@@ -52,7 +53,7 @@ class Fleet_Jobs {
 	/** Leave one matching post out of (or back in) a reviewed find and replace batch. */
 	public static function exclude( string $id, int $row, int $post, bool $excluded ): array {
 		return Fleet::locked( 'job_' . get_current_user_id(), static function () use ( $id, $row, $post, $excluded ) {
-			if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
+			if ( ! Fleet::can( 'bulk' ) ) { throw new \RuntimeException( 'Bulk update permission required.' ); }
 			$j = self::get();
 			if ( ( $j['id'] ?? '' ) !== $id || ! self::replacing( $j ) || 'ready' !== $j['phase'] ) { throw new \RuntimeException( 'This preview can no longer be changed. Refresh the page.' ); }
 			$key = $row . ':' . $post;
@@ -67,7 +68,7 @@ class Fleet_Jobs {
 	/** Compact response for UI and MCP: no site-ID list, one page of rows. */
 	public static function view( array $j, int $offset = 0 ): array {
 		if ( ! $j ) { return array(); }
-		return array( 'id' => $j['id'], 'kind' => $j['kind'] ?? 'bulk', 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'replace' => $j['replace'] ?? null, 'sites_with_matches' => count( $j['hits'] ?? array() ), 'excluded' => array_keys( $j['left_out'] ?? array() ), 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
+		return array( 'id' => $j['id'], 'kind' => $j['kind'] ?? 'bulk', 'phase' => $j['phase'], 'cursor' => (int) $j['cursor'], 'total' => count( $j['ids'] ), 'patch' => $j['patch'], 'replace' => $j['replace'] ?? null, 'report' => $j['report'] ?? null, 'auto_apply' => ! empty( $j['auto'] ), 'sites_with_matches' => count( $j['hits'] ?? array() ), 'more_sites' => array_values( $j['more'] ?? array() ), 'excluded' => array_keys( $j['left_out'] ?? array() ), 'counts' => self::counts( $j ), 'background' => in_array( $j['phase'], array( 'preview', 'apply' ), true ), 'busy' => ! empty( $j['busy'] ), 'error' => $j['error'] ?? '', 'rows_offset' => $offset, 'rows' => self::rows( $j, $offset ) );
 	}
 
 	public static function start( array $ids, array $patch ): array {
@@ -82,11 +83,24 @@ class Fleet_Jobs {
 		self::activate( $j );
 		return $j;
 	}
-	private static function create( array $ids, array $patch, ?array $replace = null ): array {
-		if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
+	/** Token check: a read-only scan for {{tokens}} that are unknown or empty on each site. Nothing is ever applied. */
+	public static function start_report( array $ids, array $spec ): array {
+		$spec = Fleet_Report::spec( $spec );
+		$j = Fleet::locked( 'job_' . get_current_user_id(), static fn() => self::create( $ids, array(), null, array( 'kind' => 'report', 'report' => $spec ) ) );
+		self::activate( $j );
+		return $j;
+	}
+	/** Import: one reviewed batch where every site gets its own values. $plan is site_id => patch. $auto applies without review (scheduled imports). */
+	public static function start_import( array $plan, array $source, bool $auto = false ): array {
+		$j = Fleet::locked( 'job_' . get_current_user_id(), static fn() => self::create( array_keys( $plan ), array(), null, array( 'kind' => 'import', 'import' => $source, 'auto' => $auto ), $plan ) );
+		self::activate( $j );
+		return $j;
+	}
+	private static function create( array $ids, array $patch, ?array $replace = null, array $extra = array(), array $plan = array() ): array {
+		if ( ! Fleet::can( 'bulk' ) ) { throw new \RuntimeException( 'Bulk update permission required.' ); }
 		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
 		if ( ! $ids || count( $ids ) > 10000 ) { throw new \InvalidArgumentException( 'Choose 1–10,000 sites.' ); }
-		if ( ! $patch && ! $replace ) { throw new \InvalidArgumentException( 'Choose at least one variable.' ); }
+		if ( ! $patch && ! $replace && ! $extra ) { throw new \InvalidArgumentException( 'Choose at least one variable.' ); }
 		// Reject a bad value once, instead of once per site.
 		$defs = Fleet::definitions();
 		foreach ( $patch as $key => $value ) {
@@ -99,7 +113,18 @@ class Fleet_Jobs {
 			for ( $n = 0; $n * self::chunk( $old ) < count( $old['ids'] ?? array() ); ++$n ) { delete_network_option( get_current_network_id(), self::chunk_key( $old, $n ) ); }
 		}
 		$j = array( 'v' => 2, 'id' => wp_generate_uuid4(), 'user' => get_current_user_id(), 'phase' => 'preview', 'ids' => $ids, 'patch' => $patch, 'cursor' => 0, 'counts' => array(), 'sample' => array(), 'schema' => Fleet::hash( Fleet::definitions() ) );
-		if ( $replace ) { $j += array( 'kind' => 'replace', 'replace' => $replace, 'hits' => array(), 'left_out' => array() ); }
+		if ( $replace ) { $j += array( 'kind' => 'replace', 'replace' => $replace, 'hits' => array(), 'left_out' => array(), 'more' => array() ); }
+		if ( $extra ) { $j += $extra + array( 'hits' => array() ); }
+		if ( $plan ) {
+			// Each site's own values travel in its result row, so no single option grows with the fleet.
+			$keys = array();
+			foreach ( array_chunk( $ids, self::chunk( $j ) ) as $n => $chunk_ids ) {
+				$rows = array();
+				foreach ( $chunk_ids as $k => $site ) { $rows[ $n * self::chunk( $j ) + $k ] = array( 'site' => $site, 'patch' => $plan[ $site ] ); $keys += array_flip( array_keys( $plan[ $site ] ) ); }
+				update_network_option( get_current_network_id(), self::chunk_key( $j, $n ), $rows );
+			}
+			$j['patch'] = array_fill_keys( array_keys( $keys ), true );
+		}
 		return self::store( $j );
 	}
 
@@ -107,7 +132,7 @@ class Fleet_Jobs {
 	public static function step( string $id, int $cursor, bool $confirm = false ): array {
 		try {
 			return Fleet::locked( 'job_' . get_current_user_id(), static function () use ( $id, $cursor, $confirm ) {
-				if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
+				if ( ! Fleet::can( 'bulk' ) ) { throw new \RuntimeException( 'Bulk update permission required.' ); }
 				$j = self::get();
 				if ( ( $j['id'] ?? '' ) !== $id ) { throw new \RuntimeException( 'Stale batch request; refresh the batch.' ); }
 				if ( (int) $j['cursor'] !== $cursor && ! ( $confirm && 'ready' === $j['phase'] ) ) { return $j; }
@@ -123,7 +148,7 @@ class Fleet_Jobs {
 
 	public static function cancel( string $id ): array {
 		return Fleet::locked( 'job_' . get_current_user_id(), static function () use ( $id ) {
-			if ( ! Fleet::network_admin() ) { throw new \RuntimeException( 'Network permission required.' ); }
+			if ( ! Fleet::can( 'bulk' ) ) { throw new \RuntimeException( 'Bulk update permission required.' ); }
 			$j = self::get();
 			if ( ( $j['id'] ?? '' ) !== $id ) { throw new \RuntimeException( 'Stale batch request; refresh the batch.' ); }
 			if ( ! in_array( $j['phase'], array( 'preview', 'ready', 'apply' ), true ) ) { return $j; }
@@ -162,6 +187,7 @@ class Fleet_Jobs {
 				}
 				if ( 'updated' === $now && 'ready' === $was && ! self::replacing( $j ) ) { $updated[] = (int) $chunk[ $i ]['site']; }
 				if ( 'preview' === $j['phase'] && ! empty( $chunk[ $i ]['matches'] ) && end( $j['hits'] ) !== $i ) { $j['hits'][] = $i; $j['matched'] = ( $j['matched'] ?? 0 ) + count( $chunk[ $i ]['matches'] ); }
+				if ( 'preview' === $j['phase'] && self::replacing( $j ) && ! empty( $chunk[ $i ]['more'] ) && ! in_array( (int) $chunk[ $i ]['site'], $j['more'] ?? array(), true ) ) { $j['more'][] = (int) $chunk[ $i ]['site']; }
 				if ( 'apply' === $j['phase'] && count( $j['sample'] ) < 20 && in_array( $now, array( 'updated', 'skipped' ), true ) ) { $j['sample'][] = array_intersect_key( $chunk[ $i ], array_flip( array( 'site', 'status', 'error' ) ) ); }
 			}
 			// Rows first, then the cursor: a crash between the two only repeats work that is safe to repeat.
@@ -171,29 +197,42 @@ class Fleet_Jobs {
 			Fleet_Cache::queue( $updated );
 			if ( 'apply' === $j['phase'] && $j['cursor'] < $total ) { self::audit( $j ); }
 		}
-		if ( $j['cursor'] === $total ) { return self::finish( $j, 'preview' === $j['phase'] ? 'ready' : 'complete' ); }
+		if ( $j['cursor'] === $total ) {
+			// A token check has nothing to apply; a scheduled import applies without waiting for review.
+			if ( 'preview' === $j['phase'] && 'report' === self::kind( $j ) ) { return self::finish( $j, 'complete' ); }
+			if ( 'preview' === $j['phase'] && ! empty( $j['auto'] ) ) {
+				$j['phase'] = 'apply'; $j['cursor'] = 0; $j['sample'] = array(); self::store( $j );
+				return $limit > $done ? self::advance( $j, true, $limit - $done, $seconds - ( microtime( true ) - $start ) ) : $j;
+			}
+			return self::finish( $j, 'preview' === $j['phase'] ? 'ready' : 'complete' );
+		}
 		return $j;
 	}
 
 	private static function row( array $j, int $i, array $row ): array {
 		$site = (int) $j['ids'][ $i ];
 		if ( self::replacing( $j ) ) { return self::replace_row( $j, $i, $row ); }
+		if ( 'report' === self::kind( $j ) ) { return Fleet_Report::row( $site, $j['report'] ); }
+		$import = 'import' === self::kind( $j );
+		$patch = $import ? (array) ( $row['patch'] ?? array() ) : $j['patch'];
+		$write = static fn( callable $callback ) => $import ? Fleet::import_write( $callback ) : $callback();
 		try {
 			if ( 'preview' === $j['phase'] ) {
 				$before = Fleet::profile( $site );
-				$after = Fleet::save_profile( $site, $j['patch'], null, '', true );
-				return array( 'site' => $site, 'before' => array_intersect_key( $before['values'] ?? array(), $j['patch'] ), 'after' => array_intersect_key( $after['values'] ?? array(), $j['patch'] ), 'hash' => Fleet::hash( $before ), 'status' => 'ready' );
+				$after = $write( static fn() => Fleet::save_profile( $site, $patch, null, '', true ) );
+				$changed = array_intersect_key( $before['values'] ?? array(), $patch ) != array_intersect_key( $after['values'] ?? array(), $patch ); // phpcs:ignore Universal.Operators.StrictComparisons.LooseNotEqual -- Order-insensitive array comparison.
+				return array( 'site' => $site, 'before' => array_intersect_key( $before['values'] ?? array(), $patch ), 'after' => array_intersect_key( $after['values'] ?? array(), $patch ), 'hash' => Fleet::hash( $before ), 'status' => $import && ! $changed ? 'unchanged' : 'ready' ) + ( $import ? array( 'patch' => $patch ) : array() );
 			}
 			if ( 'ready' !== ( $row['status'] ?? '' ) ) { return $row; }
 			try {
-				Fleet::bulk_write( static fn() => Fleet::save_profile( $site, $j['patch'], null, $row['hash'] ) );
+				$write( static fn() => Fleet::bulk_write( static fn() => Fleet::save_profile( $site, $patch, null, $row['hash'] ) ) );
 			} catch ( \RuntimeException $e ) {
 				// A checkpoint lost after the write leaves the site already holding exactly the reviewed values.
-				if ( ! self::same( array_intersect_key( Fleet::profile( $site )['values'] ?? array(), $j['patch'] ), $row['after'] ) ) { throw $e; }
+				if ( ! self::same( array_intersect_key( Fleet::profile( $site )['values'] ?? array(), $patch ), $row['after'] ) ) { throw $e; }
 			}
 			return array( 'status' => 'updated' ) + $row;
 		} catch ( \Throwable $e ) {
-			return array( 'site' => $site, 'status' => 'skipped', 'error' => $e->getMessage() );
+			return array( 'site' => $site, 'status' => 'skipped', 'error' => $e->getMessage() ) + ( $import ? array( 'patch' => $patch ) : array() );
 		}
 	}
 	/** Preview lists matching posts on one site; apply rewrites the ones still included and unchanged. */
@@ -284,7 +323,7 @@ class Fleet_Jobs {
 					$j = self::get( (int) $user );
 					if ( ! $j || ! in_array( $j['phase'], array( 'preview', 'apply' ), true ) ) { self::deactivate( (int) $user ); return; }
 					// An owner who lost network access stops their batch; it never writes as someone else.
-					if ( ! Fleet::network_admin() ) { self::finish( $j, 'stopped', 'The batch owner no longer has network permission.' ); return; }
+					if ( ! Fleet::can( 'bulk' ) ) { self::finish( $j, 'stopped', 'The batch owner no longer has bulk update permission.' ); return; }
 					try {
 						self::advance( $j, false, PHP_INT_MAX, $until - microtime( true ) );
 					} catch ( \RuntimeException $e ) {
@@ -297,9 +336,10 @@ class Fleet_Jobs {
 				wp_set_current_user( $previous );
 			}
 		}
+		Fleet_Segments::rebuild( max( 1, $until - microtime( true ) ) );
 		Fleet_Cache::drain( $until - microtime( true ) );
 		Fleet::index_managed_sites( 1000 );
-		if ( get_network_option( get_current_network_id(), self::ACTIVE, array() ) || Fleet_Cache::pending() ) { return; }
+		if ( get_network_option( get_current_network_id(), self::ACTIVE, array() ) || Fleet_Cache::pending() || Fleet_Segments::pending() ) { return; }
 		// Idle: stop ticking until wake() is called again.
 		wp_clear_scheduled_hook( self::HOOK );
 	}

@@ -110,12 +110,12 @@ switch_to_blog( $b ); $in_b = Fleet_Embeds::markup( 'footer' ); restore_current_
 ok( str_contains( $in_a, 'qc()' ) && ! str_contains( $in_b, 'qc()' ), 'embed prints only on sites in its segment' );
 
 // --- Regional shared content, showcases and content masters.
-$m = site( 'master' );
-page( $m, 'privacy', '<!-- wp:paragraph --><p>Privacy generic for {{province}}</p><!-- /wp:paragraph -->' );
-page( $m, 'privacy-qc', '<!-- wp:paragraph --><p>Privacy Quebec</p><!-- /wp:paragraph -->' );
-page( $m, 'faq-set', '<!-- wp:paragraph --><p>FAQ showcase {{cta}}</p><!-- /wp:paragraph -->', 'wp_block' );
-foreach ( array( $a, $b ) as $site ) { Fleet::save_profile( $site, array(), array( 'source_id' => $m ) ); }
-Fleet::save_profile( $c, array(), array( 'source_id' => $m ) );
+$master_site = site( 'master' );
+page( $master_site, 'privacy', '<!-- wp:paragraph --><p>Privacy generic for {{province}}</p><!-- /wp:paragraph -->' );
+page( $master_site, 'privacy-qc', '<!-- wp:paragraph --><p>Privacy Quebec</p><!-- /wp:paragraph -->' );
+page( $master_site, 'faq-set', '<!-- wp:paragraph --><p>FAQ showcase {{cta}}</p><!-- /wp:paragraph -->', 'wp_block' );
+foreach ( array( $a, $b ) as $site ) { Fleet::save_profile( $site, array(), array( 'source_id' => $master_site ) ); }
+Fleet::save_profile( $c, array(), array( 'source_id' => $master_site ) );
 switch_to_blog( $a ); $qc = $content->render_shared( 'privacy-{{province}}' ); $faq = $content->render_shared( 'faq-set', 'pattern' ); restore_current_blog();
 switch_to_blog( $b ); $on = $content->render_shared( 'privacy-{{province}}' ); restore_current_blog();
 ok( str_contains( $qc, 'Privacy Quebec' ), 'regional slug picks the province version' );
@@ -133,7 +133,7 @@ ok( str_contains( $fr, 'Confidentialité' ) && str_contains( $en, 'Privacy gener
 Fleet_Segments::rebuild( 10 );
 $consumer = page( $b, 'uses-shared', '<!-- wp:brand-fleet/shared-content {"slug":"privacy"} /-->' );
 update_network_option( get_current_network_id(), Fleet_Cache::QUEUE, array() );
-switch_to_blog( $m );
+switch_to_blog( $master_site );
 $privacy = get_page_by_path( 'privacy' );
 wp_update_post( array( 'ID' => $privacy->ID, 'post_content' => '<!-- wp:paragraph --><p>Privacy updated</p><!-- /wp:paragraph -->' ) );
 restore_current_blog();

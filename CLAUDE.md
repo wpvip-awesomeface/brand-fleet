@@ -5,6 +5,7 @@ WordPress multisite plugin. PHP 8.0+, WordPress 6.9+. No build step: blocks and 
 ## Before opening a PR
 
 - Run `bash scripts/lint.sh` (PHP + JS syntax check). It must print `Lint OK`.
+- CI also runs the WordPress VIP standard (`composer phpcs`) on every PR. Run it locally when Composer is available; in agent runs, read the CI result instead of claiming it passed.
 - If you touched `.github/`, run `bash scripts/validate-workflows.sh`.
 - `tests/clone-site.php` needs a disposable multisite (`wp eval-file`); it cannot run in CI. Say so in the PR instead of claiming it passed.
 

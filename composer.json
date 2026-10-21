@@ -1,0 +1,26 @@
+{
+	"name": "wpvip-awesomeface/brand-fleet",
+	"description": "Network-managed brand variables for WordPress multisite.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.0"
+	},
+	"require-dev": {
+		"automattic/vipwpcs": "^3.0",
+		"dealerdirect/phpcodesniffer-composer-installer": "^1.0"
+	},
+	"config": {
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		},
+		"platform": {
+			"php": "8.0.30"
+		}
+	},
+	"scripts": {
+		"lint": "bash scripts/lint.sh",
+		"phpcs": "phpcs",
+		"phpcbf": "phpcbf"
+	}
+}

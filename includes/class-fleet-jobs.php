@@ -294,6 +294,14 @@ class Fleet_Jobs {
 			if ( isset( $j['undo']['batch'] ) ) { Fleet_Undo::mark_undone( $j['undo']['batch'], $j['id'] ); }
 		}
 		if ( 'stopped' === $phase ) { Fleet_Alerts::batch_stopped( $j ); }
+		/**
+		 * Fires when a background batch leaves preview or apply.
+		 *
+		 * @param array  $job      Batch: id, kind (bulk, replace, report, import, undo, revert), user, ids, counts.
+		 * @param string $phase    New phase: ready (preview done), complete (applied, or a token check done), cancelled or stopped.
+		 * @param bool   $applying True when this batch was applying changes, false when it was previewing.
+		 */
+		do_action( 'brand_fleet_batch_finished', $j, $phase, $applying );
 		return $j;
 	}
 	/** Activity is a log, not a gate: a busy log never stops a batch. */

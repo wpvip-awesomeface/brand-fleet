@@ -69,12 +69,35 @@ On a disposable `*.localhost` multisite with Brand Fleet network-activated, run 
 
 ## Development
 
-Coding standards use the WordPress VIP ruleset:
+Every pull request runs CI (`.github/workflows/ci.yml`): a PHP and JS syntax check, then the WordPress VIP coding standard. Run the same checks locally:
 
 ```bash
-composer global require automattic/vipwpcs
-phpcs --standard=phpcs.xml.dist
+composer install
+composer lint
+composer phpcs
 ```
+
+### Hooks
+
+Filters:
+
+- `brand_fleet_tokens( array $tokens, int $site )`: the `{{token}}` => value map for one site, built once per request. Add, change or remove tokens.
+- `brand_fleet_text_filters( array $hooks )`: extra text filters that get token swaps (for example another SEO plugin's title filter).
+- `brand_fleet_shared_content( string $html, string $slug, string $kind )`: HTML from a shared-content block, after rendering. Output must vary only by site, never by visitor.
+- `brand_fleet_purge_post_types( array $types, int $site )`: post types edge-purged when a site's values change. Defaults to public post types.
+- `brand_fleet_local_business( array $data, int $site )`: the LocalBusiness JSON-LD before it prints.
+- `brand_fleet_ability_allowed( bool $allowed, string $name )`: whether the current user may run an ability (for example `preview-bulk`). The ability's own write checks still apply.
+
+Actions:
+
+- `brand_fleet_definition_saved( string $key, array $definition, array $previous )`: a variable definition was saved. `$previous` is empty for a new one.
+- `brand_fleet_profile_saved( int $site, array $new, array $old, string $via )`: one site's values were written. `$via` is `edit`, `bulk`, `import`, `undo`, `request` or `restore`. An empty `$old` means the site was just enrolled.
+- `brand_fleet_batch_finished( array $job, string $phase, bool $applying )`: a background batch finished a preview (`ready`) or apply (`complete`), or was `cancelled` or `stopped`.
+- `brand_fleet_cloned_site( int $source, int $site, array $id_map )`: a location was cloned.
+
+### Uninstall
+
+Deleting the plugin from **Network Admin → Plugins** stops its scheduled events and clears in-flight batch state. Brand data (definitions, segments, every site's values, history, undo data) is kept, because removing it changes what every site prints. To remove that too, add `define( 'BRAND_FLEET_DELETE_DATA', true );` to `wp-config.php` before deleting. An mu-plugin install never runs `uninstall.php`.
 
 ## License
 

@@ -199,7 +199,13 @@ class Settings {
 
 	public static function tokens(): array {
 		$site = get_current_blog_id();
-		if ( ! isset( self::$tokens[ $site ] ) ) { self::$tokens[ $site ] = self::build_tokens(); }
+		/**
+		 * Filters the `{{token}}` => value map for one site, once per request.
+		 *
+		 * @param array<string, string> $tokens Keys include the braces, e.g. '{{business_name}}'.
+		 * @param int                   $site   Blog ID being rendered.
+		 */
+		if ( ! isset( self::$tokens[ $site ] ) ) { self::$tokens[ $site ] = (array) apply_filters( 'brand_fleet_tokens', self::build_tokens(), $site ); }
 		return self::$tokens[ $site ];
 	}
 	private static function build_tokens(): array {

@@ -109,14 +109,26 @@ class Fleet_Abilities {
 		$this->ability( 'decide-request', array( 'id' => array( 'type' => 'string' ), 'approve' => array( 'type' => 'boolean' ), 'reason' => array( 'type' => 'string', 'maxLength' => 500 ) ), array( 'id', 'approve' ), static fn( $in ) => Fleet_Requests::decide( (string) $in['id'], (bool) $in['approve'], (string) ( $in['reason'] ?? '' ) ), false, 'Approve (sets the value on that site) or decline one change request. The requester gets an email.' );
 		$this->ability( 'local-seo-preview', array( 'site_id' => $integer ), array( 'site_id' ), static fn( $in ) => array( 'settings' => Fleet_Schema::settings(), 'json_ld' => Fleet_Schema::data( (int) $in['site_id'], array( 'enabled' => true ) + Fleet_Schema::settings() ) ), true, 'Read-only. The schema.org LocalBusiness JSON-LD one site would print with the current Local SEO settings, even while output is turned off.' );
 	}
+	/**
+	 * Abilities that overwrite existing values, definitions or settings when they run (MCP destructiveHint).
+	 * Previews, status reads, cancel and clone-site (creates a new site) only add or report.
+	 */
+	const DESTRUCTIVE = array( 'save-definition', 'configure-site', 'advance-bulk', 'save-segments', 'import-definitions', 'decide-request' );
 	/** Which fleet capability each ability needs; anything not listed needs a network admin. */
 	const NEEDS = array( 'inspect' => 'any', 'save-definition' => 'manage', 'save-segments' => 'manage', 'export-definitions' => 'manage', 'import-definitions' => 'manage', 'configure-site' => 'values', 'preview-bulk' => 'bulk', 'preview-replace' => 'bulk', 'preview-import' => 'bulk', 'preview-token-report' => 'bulk', 'bulk-status' => 'bulk', 'advance-bulk' => 'bulk', 'cancel-bulk' => 'bulk', 'export-values' => 'bulk', 'site-history' => 'values', 'overrides' => 'values', 'list-undo' => 'bulk', 'preview-undo' => 'bulk', 'list-requests' => 'values', 'decide-request' => 'values', 'local-seo-preview' => 'manage' );
 	public static function allowed( string $name ): bool {
 		$need = self::NEEDS[ $name ] ?? '';
-		if ( 'any' === $need ) { return Fleet::can_any(); }
-		return $need ? Fleet::can( $need ) : Fleet::network_admin();
+		$allowed = 'any' === $need ? Fleet::can_any() : ( $need ? Fleet::can( $need ) : Fleet::network_admin() );
+		/**
+		 * Filters whether the current user may run one Brand Fleet ability (MCP / Abilities API).
+		 * The ability's own write checks still apply.
+		 *
+		 * @param bool   $allowed Result of the built-in capability check.
+		 * @param string $name    Ability name without the 'brand-fleet/' prefix, e.g. 'preview-bulk'.
+		 */
+		return (bool) apply_filters( 'brand_fleet_ability_allowed', $allowed, $name );
 	}
 	private function ability( string $name, array $properties, array $required, callable $run, bool $read = false, string $description = '' ): void {
-		wp_register_ability( 'brand-fleet/' . $name, array( 'label' => 'Brand Fleet: ' . $name, 'description' => $description ? $description : 'Network-admin fleet operation. Inspect first; bulk writes require completed preview and confirm=true. Null values reset inheritance. Never publishes sites or pages.', 'category' => 'brand-fleet', 'input_schema' => array( 'type' => 'object', 'properties' => $properties, 'required' => $required, 'additionalProperties' => false ), 'permission_callback' => static fn() => self::allowed( $name ), 'execute_callback' => static function ( $input ) use ( $run ) { try { return $run( $input ?? array() ); } catch ( \Throwable $e ) { return new \WP_Error( 'brand_fleet_error', $e->getMessage() ); } }, 'meta' => array( 'mcp' => array( 'public' => true ), 'annotations' => array( 'readonly' => $read, 'destructive' => false, 'idempotent' => $read ) ) ) );
+		wp_register_ability( 'brand-fleet/' . $name, array( 'label' => 'Brand Fleet: ' . $name, 'description' => $description ? $description : 'Network-admin fleet operation. Inspect first; bulk writes require completed preview and confirm=true. Null values reset inheritance. Never publishes sites or pages.', 'category' => 'brand-fleet', 'input_schema' => array( 'type' => 'object', 'properties' => $properties, 'required' => $required, 'additionalProperties' => false ), 'permission_callback' => static fn() => self::allowed( $name ), 'execute_callback' => static function ( $input ) use ( $run ) { try { return $run( $input ?? array() ); } catch ( \Throwable $e ) { return new \WP_Error( 'brand_fleet_error', $e->getMessage() ); } }, 'meta' => array( 'mcp' => array( 'public' => true ), 'annotations' => array( 'readonly' => $read, 'destructive' => in_array( $name, self::DESTRUCTIVE, true ), 'idempotent' => $read ) ) ) );
 	}
 }

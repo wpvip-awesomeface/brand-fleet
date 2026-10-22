@@ -219,7 +219,6 @@ class Fleet_Cache {
 				array_values( get_post_types( array( 'public' => true ) ) ),
 				(int) $work['id']
 			);
-			// phpcs:enable WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts
 			$posts = get_posts(
 				array(
 					'post_type'        => $types,
@@ -232,6 +231,7 @@ class Fleet_Cache {
 					'fields'           => 'ids',
 				)
 			);
+			// phpcs:enable WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts
 			foreach ( $posts as $k => $id ) {
 				wpvip_purge_edge_cache_for_post( $id );
 				if ( 0 === ( $k + 1 ) % self::FLUSH_EVERY ) {

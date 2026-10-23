@@ -495,9 +495,12 @@ class Fleet_Jobs {
 		$undo   = 'undo' === self::kind( $j );
 		$patch  = $import ? (array) ( $row['patch'] ?? array() ) : $j['patch'];
 		// Undo writes the old values back as they were, including imported ones, and history says why.
-		$write = static fn( callable $callback ) => $import
-			? Fleet::via( $undo ? 'undo' : 'import', static fn() => Fleet::import_write( $callback ) )
-			: $callback();
+		$write = static function ( callable $callback ) use ( $import, $undo ) {
+			if ( ! $import ) {
+				return $callback();
+			}
+			return Fleet::via( $undo ? 'undo' : 'import', static fn() => Fleet::import_write( $callback ) );
+		};
 		try {
 			if ( 'preview' === $j['phase'] ) {
 				if ( $undo && isset( $row['expect'] ) && Fleet_Undo::changed_since( $site, (array) $row['expect'] ) ) {

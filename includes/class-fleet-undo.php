@@ -110,10 +110,12 @@ class Fleet_Undo {
 				continue;
 			}
 			$keys   = array_keys( 'bulk' === $kind ? (array) $j['patch'] : (array) ( $row['patch'] ?? array() ) );
-			$pick   = static fn( array $values ) => array_combine(
-				$keys,
-				array_map( static fn( $key ) => $values[ $key ] ?? null, $keys )
-			);
+			$pick   = static function ( array $values ) use ( $keys ): array {
+				return array_combine(
+					$keys,
+					array_map( static fn( $key ) => $values[ $key ] ?? null, $keys )
+				);
+			};
 			$keep[] = array(
 				's' => (int) $row['site'],
 				'b' => $pick( (array) ( $row['before'] ?? array() ) ),
@@ -261,7 +263,7 @@ class Fleet_Undo {
 		// phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.switch_to_blog_switch_to_blog -- Background batch reads or restores one site's posts; always restored.
 		switch_to_blog( $site );
 		try {
-			// phpcs:disable WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Exact postmeta meta_key lookup (indexed); a find and replace changes at most MAX_MATCHES posts per site.
+			// phpcs:disable WordPress.DB.SlowDBQuery.slow_db_query_meta_key, WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts -- Exact postmeta meta_key lookup (indexed), at most MAX_MATCHES posts per site; suppress_filters=false enables VIP query caching.
 			$ids = get_posts(
 				array(
 					'post_type'        => array_keys( Fleet_Replace::TYPES ),
@@ -274,7 +276,7 @@ class Fleet_Undo {
 					'suppress_filters' => false,
 				)
 			);
-			// phpcs:enable WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+			// phpcs:enable WordPress.DB.SlowDBQuery.slow_db_query_meta_key, WordPressVIPMinimum.Functions.RestrictedFunctions.get_posts_get_posts
 			if ( 'preview' === $j['phase'] ) {
 				$matches = array();
 				foreach ( $ids as $id ) {
